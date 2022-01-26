@@ -205,21 +205,22 @@ class random_player(player):
     """
     This player makes random moves that are not among OD, DD, or R
     """
-    def move(self, _board: connect_4_board) -> connect_4_board:
+    def move(self, _board: connect_4_board) -> str:
         _moves = _board.moves
         if 'OD' in _moves: _moves.remove('OD')
         if 'DD' in _moves: _moves.remove('DD')
         if 'R' in _moves: _moves.remove('R')
-    
-        _move = np.random.choice(_moves)
 
-        return connect_4_board.move(_board, _move, False)
+        return np.random.choice(_moves)
+    
+    def inform(self, _move: str):
+        ...
 
 class cli_player(player):
     """
     This player plays from the command line interface, inputting moves as strings. 
     """
-    def move(self, _board: connect_4_board) -> connect_4_board:
+    def move(self, _board: connect_4_board) -> str:
         print("The board currently looks like:")
         print(_board.grid)
         valid = False
@@ -227,7 +228,11 @@ class cli_player(player):
             print("The valid moves are:")
             print(_board.moves)
             _move = input("Please input a valid move: ")
-            try:
-                return _board.move(_board, _move, inplace = False)
-            except InvalidMoveException:
+            
+            if _move not in _board.moves:
                 print("That was not a valid move.")
+            else:
+                return _move
+
+    def inform(self, _move: str):
+        print(_move + " was played.")

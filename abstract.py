@@ -64,9 +64,17 @@ class player(ABC):
     This is the abstract player class defining how all other players must be defined.
     """
     @abstractmethod
-    def move(self, _board: board) -> board:
+    def move(self, _board: board) -> str:
         """
         The logic that decides what move to make. The primary difference between players is contained here.
+        """
+        ...
+
+    @abstractmethod
+    def inform(self, _move: str):
+        """
+        There are some players that need to know when other players make moves.
+        A game can call this on each player every time a move is made, so that players get updates on other players moves.
         """
         ...
 
