@@ -1,4 +1,7 @@
 from abc import *
+from itertools import cycle
+
+from exceptions import InvalidMoveException
 
 class board(ABC):
     """
@@ -27,18 +30,24 @@ class board(ABC):
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def move(cls, _board: 'board', move: str, inplace: bool = False) -> 'board':
+    def move(self, move: str, inplace: bool = True) -> 'board':
         """
         Attempts to make a move, and returns the updated board after the move.
-        If inplace is true, it should return a reference to the same board, only updated.
+        inplace describes whether it is returning a reference to the same board or a new board.
         """
         ...
 
-    @classmethod
     @abstractmethod
-    def copy(cls, _board: 'board') -> 'board':
+    def reset(self) -> None:
+        """
+        Resets the board to it's initial state.
+        Used so that players can have a reference to the same board across multiple games.
+        """
+        ...
+
+    @abstractmethod
+    def copy(self) -> 'board':
         """
         Returns a deep copy of a board.
         """
@@ -62,9 +71,15 @@ class board(ABC):
 class player(ABC):
     """
     This is the abstract player class defining how all other players must be defined.
+    Players in a game will all have a reference to the same board.
+    This allows for a better synchronization between all players.
     """
+    def __init__(self, _board: board) -> None:
+        super().__init__()
+        self.board = _board
+
     @abstractmethod
-    def move(self, _board: board) -> str:
+    def move(self) -> str:
         """
         The logic that decides what move to make. The primary difference between players is contained here.
         """
@@ -78,13 +93,52 @@ class player(ABC):
         """
         ...
 
-class game(ABC):
+class sequential_game():
     """
-    This is the abstract game class defining how all other games must be defined.
+    This class fully handles running a game where players take turns in order.
     """
-    @abstractmethod
+    def __init__(self, _board: board, *players: player) -> None:
+        self.players = players
+        self.board = _board
+
     def play(self) -> dict:
         """
-        The logic for playing out a game. Returns a dictionary that is meant to summarize the game after it ends.
+        This function cycles through players until a terminal board state is reached.
         """
-        ...
+        
+        # Start by initializing the game
+        self.board.reset()
+        board_list = [self.board.serialize()]
+        it = iter(cycle(self.players))
+        current_player = next(it)
+
+        while not self.board.is_terminal:
+            # Have the player choose a move
+            _move = current_player.move()
+
+            # Try to make the chosen move
+            try:
+                self.board.move(_move)
+            except InvalidMoveException as e:
+                print(*e.args)
+                if input("Try again? [y/n]") == 'y':
+                    continue
+
+            # If the move was successful then add the new board state to the list
+            board_list.append(self.board.serialize())
+            
+            # Inform other players of the move made
+            for informed_player in self.players:
+                if informed_player == current_player:
+                    continue
+                informed_player.inform(_move)
+            
+            # Move to the next player
+            current_player = next(it)
+
+        # Now the game is finished
+        # I'm leaving this as a dictionary just because idk if in the future I'd like to report more info
+        # Or, have optionally different types of returns based on configuration settings.
+        return {
+            "boards": board_list
+        }

@@ -1,9 +1,7 @@
 from typing import Callable
-from abstract import *
-
 import numpy as np
 
-from connect_4.implementations import connect_4_board
+from abstract import *
 
 class node():
     def __init__(self, parent = None, children = None, **kwargs):
@@ -47,7 +45,7 @@ class node():
 
 class mcts_node(node):
     def __init__(self,
-        move: str = None,
+        move: np.array = None,
         parent: 'mcts_node' = None,
         children: 'mcts_node' = None,
         N: int = 0,
@@ -59,13 +57,13 @@ class mcts_node(node):
         super().__init__(parent, children, move = move, N = N, W = W, Q = Q, P = P, **kwargs)
 
 _DEFAULT_PROPS = 1000
-_DEFAULT_TEMPERATURE = 0.5
+_DEFAULT_TEMPERATURE = 1
 _EXPLORATION_CONSTANT = 1
 
 class mcts():
     def __init__(self,
-        decision_func: Callable[[board], dict],
-        root_board: board):
+        _board: board,
+        decision_func: Callable[[board], dict]):
         """
         decision_func:
             This takes in a board, specifically at a leaf. It outputs a dictionary with the following format:
@@ -84,18 +82,23 @@ class mcts():
         
         root:
             This is the starting point for the tree search.
+            The important point to note here is that we pass a board upon initialization.
+            This means the tree search will start here.
+            However, as we make moves and the game progresses, the remaining subtrees are retained.
+            So re-initializing the mcts resets the tree.
+            We want to initialize once and play out the entire game before initializing again.
         """
 
         # Begin by initializing
         self.decision_func = decision_func
-        self.root_board = root_board
+        self.board = _board
         self.root_node = mcts_node()
     
     def _propogate(self, n: int = _DEFAULT_PROPS):
         for _ in range(n):
             # We start at the root node, and then choose nodes that maximize Q + U until a leaf node is reached
             _node = self.root_node
-            _board = self.root_board.copy(self.root_board)
+            _board = self.board.copy()
             while not _node.is_leaf():
                 _max = -np.Inf
                 _max_node = None
@@ -106,7 +109,7 @@ class mcts():
                         _max = child.Q + _U
                         _max_node = child
                 _node = _max_node
-                _board.move(_board, _node.move, True)
+                _board.move(_node.move)
 
             # Now we as the decision_func what it thinks about this leaf node
             _dict = self.decision_func(_board)
@@ -126,16 +129,14 @@ class mcts():
         # If a leaf node is the root node, then it has never been visited and we essentially start a new tree under it.
         if self.root_node.children == []:
             self.root_node = mcts_node()
-            self.root_board.move(self.root_board, _move, inplace = True)
             return
         
         # In this case the root node has already been expanded with all possible options, so we find the relevant move.
         for child in self.root_node.children:
             if child.move == _move:
                 self.root_node = child
-                self.root_board = self.root_board.move(self.root_board, _move)
                 return
-        raise ValueError("mcts tried to make a move on a root board that wasn't an option... it's confused!")
+        raise ValueError("mcts tried to make move" + _move + "on board:\n" + str(self.board))
     
     def run_deterministically(self, n: int = _DEFAULT_PROPS) -> str:
         self._propogate(n)
@@ -156,8 +157,7 @@ class mcts():
             if child.Q + _U > _max:
                 _max = child.Q + _U
                 _max_node = child
-        
-        self.root_board = self.root_board.move(self.root_board, _max_node.move)
+
         self.root_node = _max_node.prune()
 
         return self.root_node.move
@@ -172,18 +172,18 @@ class mcts():
         if self.root_node.children == []:
             return self.root_node
 
-        p = [child.N ** (1 / _DEFAULT_TEMPERATURE) for child in self.root_node.children]
+        p = [child.N ** (1 / tau) for child in self.root_node.children]
         p = list(map(lambda x: x / sum(p), p))
         self.root_node = np.random.choice(self.root_node.children, p = p).prune()
-        self.root_board = self.root_board.move(self.root_board, self.root_node.move)
 
         return self.root_node.move
 
 class mcts_player(player):
-    def __init__(self, decision_func, root_board):
-        self.mcts = mcts(decision_func, root_board)
+    def __init__(self, _board, decision_func):
+        super().__init__(_board)
+        self.mcts = mcts(decision_func, _board)
 
-    def move(self, _board: board) -> str:
+    def move(self) -> str:
         return self.mcts.run_deterministically()
     
     def inform(self, _move: str):
