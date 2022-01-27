@@ -45,7 +45,7 @@ class node():
 
 class mcts_node(node):
     def __init__(self,
-        move: np.array = None,
+        _move: str = None,
         parent: 'mcts_node' = None,
         children: 'mcts_node' = None,
         N: int = 0,
@@ -54,19 +54,19 @@ class mcts_node(node):
         P: float = 0,
         **kwargs):
 
-        super().__init__(parent, children, move = move, N = N, W = W, Q = Q, P = P, **kwargs)
+        super().__init__(parent, children, move = _move, N = N, W = W, Q = Q, P = P, **kwargs)
 
 _DEFAULT_PROPS = 1000
-_DEFAULT_TEMPERATURE = 1
+_TEMPERATURE = 1
 _EXPLORATION_CONSTANT = 1
 
 class mcts():
     def __init__(self,
         _board: board,
-        decision_func: Callable[[board], dict]):
+        decision_func: Callable[[board, board], dict]):
         """
         decision_func:
-            This takes in a board, specifically at a leaf. It outputs a dictionary with the following format:
+            This takes in a root board and a board to examine, specifically at a leaf. It outputs a dictionary with the following format:
             {
                 "value": "float in [-1,1], indicating value of this node",
                 "policy": [
@@ -78,7 +78,8 @@ class mcts():
             }
         The nodes returned by the policy will have their P populated appropriately, and this is how we access the policy.
         The idea is that a virtual board gets passed around as we traverse the tree.
-        This way we do not have a board for each node, which would take up inconceivable amounts of memory.
+        The root board tells the decision function from what perspective we are evaluating the virtual board from.
+        This is mostly to obtain which player is evaluating the virtual board.
         
         root:
             This is the starting point for the tree search.
@@ -101,18 +102,20 @@ class mcts():
             _board = self.board.copy()
             while not _node.is_leaf():
                 _max = -np.Inf
-                _max_node = None
+                _max_nodes = None
                 _sqrt = np.sqrt(sum(_n.N for _n in _node.children))
                 for child in _node.children:
                     _U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
-                    if child.Q + _U >= _max:
+                    if child.Q + _U > _max:
                         _max = child.Q + _U
-                        _max_node = child
-                _node = _max_node
+                        _max_nodes = [child]
+                    elif child.Q + _U == _max:
+                        _max_nodes.append(child)
+                _node = np.random.choice(_max_nodes)
                 _board.move(_node.move)
 
             # Now we as the decision_func what it thinks about this leaf node
-            _dict = self.decision_func(_board)
+            _dict = self.decision_func(self.board, _board)
 
             # We add the new leaf nodes who will have their initialized probabilities
             _node.add(*_dict["policy"])
@@ -147,7 +150,7 @@ class mcts():
         # As it stands, we will simply return this node after being asked to make a move here.
         # Might be better to define a custom exception to throw instead.
         if self.root_node.children == []:
-            return self.root_node
+            raise Exception("huh")
 
         _max = -np.Inf
         _max_node = None
@@ -158,11 +161,15 @@ class mcts():
                 _max = child.Q + _U
                 _max_node = child
 
+        all_nodes = self.root_node.children
         self.root_node = _max_node.prune()
 
-        return self.root_node.move
+        return {
+            "move_code": self.root_node.move,
+            "all_nodes": all_nodes
+        }
 
-    def run_stochastically(self, n: int = _DEFAULT_PROPS, tau: float = _DEFAULT_TEMPERATURE) -> str:
+    def run_stochastically(self, n: int = _DEFAULT_PROPS) -> dict:
         self._propogate(n)
 
         ### QUESTIONABLE BEHAVIOR HERE ###
@@ -170,21 +177,40 @@ class mcts():
         # As it stands, we will simply return this node after being asked to make a move here.
         # Might be better to define a custom exception to throw instead.
         if self.root_node.children == []:
-            return self.root_node
+            raise Exception("huh")
 
-        p = [child.N ** (1 / tau) for child in self.root_node.children]
+        p = [child.N ** (1 / _TEMPERATURE) for child in self.root_node.children]
         p = list(map(lambda x: x / sum(p), p))
+        all_nodes = self.root_node.children
+        _sum = sum([_nodes.N ** (1 / _TEMPERATURE) for _nodes in all_nodes])
         self.root_node = np.random.choice(self.root_node.children, p = p).prune()
 
-        return self.root_node.move
+        for _node in all_nodes:
+            _node.pi = (_node.N ** (1 / _TEMPERATURE)) / _sum
+
+        return {
+            "move_code": self.root_node.move,
+            "all_nodes": all_nodes
+        }
 
 class mcts_player(player):
     def __init__(self, _board, decision_func):
         super().__init__(_board)
-        self.mcts = mcts(decision_func, _board)
+        self.mcts = mcts(_board, decision_func)
 
-    def move(self) -> str:
+    def move(self) -> dict:
         return self.mcts.run_deterministically()
+    
+    def inform(self, _move: str):
+        self.mcts.move(_move)
+
+class mcts_training_player(player):
+    def __init__(self, _board: board, decision_func) -> None:
+        super().__init__(_board)
+        self.mcts = mcts(_board, decision_func)
+    
+    def move(self) -> dict:
+        return self.mcts.run_stochastically()
     
     def inform(self, _move: str):
         self.mcts.move(_move)

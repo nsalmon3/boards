@@ -3,6 +3,7 @@ import numpy as np
 
 from abstract import *
 from exceptions import *
+from tree import mcts_player
 
 # Non-terminal board ids
 BLACK_TO_MOVE = 'B'
@@ -51,6 +52,18 @@ ID_UNCODES = {
     "D": DRAW
 }
 
+# Used by neural networks to take moves as inputs via one-hot encoding
+ID_ONE_HOT = {
+    BLACK_TO_MOVE: np.array((1, 0, 0, 0, 0, 0, 0)),
+    RED_TO_MOVE: np.array((0, 1, 0, 0, 0, 0, 0)),
+    BLACK_OFFERS_DRAW: np.array((0, 0, 1, 0, 0, 0, 0)),
+    RED_OFFERS_DRAW: np.array((0, 0, 0, 1, 0, 0, 0)),
+
+    BLACK_WINS: np.array((0, 0, 0, 0, 1, 0, 0)),
+    RED_WINS: np.array((0, 0, 0, 0, 0, 1, 0)),
+    DRAW: np.array((0, 0, 0, 0, 0, 0, 1))
+}
+
 # Piece-placing move ids
 PLACE_1 = "1"
 PLACE_2 = "2"
@@ -75,6 +88,21 @@ OFFER_DRAW = "OD"
 ACCEPT_DRAW = "AD"
 DECLINE_DRAW = "DD"
 RESIGN = "R"
+
+# One-hot encoding of moves to be used by neural network models
+MOVE_ONE_HOT = {
+    PLACE_1: np.array((1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+    PLACE_2: np.array((0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+    PLACE_3: np.array((0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0)),
+    PLACE_4: np.array((0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0)),
+    PLACE_5: np.array((0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0)),
+    PLACE_6: np.array((0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0)),
+    PLACE_7: np.array((0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0)),
+    OFFER_DRAW: np.array((0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0)),
+    ACCEPT_DRAW: np.array((0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0)),
+    DECLINE_DRAW: np.array((0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)),
+    RESIGN: np.array((0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1))
+}
 
 # Used to display moves in a text format
 MOVE_STRINGS = {
@@ -213,6 +241,7 @@ class connect_4_board(board):
                 _board.id = BLACK_TO_MOVE
             else:
                 _board.id = RED_TO_MOVE
+            return _board
         elif _move == RESIGN:
             if _board.id == RED_TO_MOVE or _board.id == BLACK_OFFERS_DRAW:
                 _board.id = BLACK_WINS
@@ -329,7 +358,7 @@ class random_player(player):
         if OFFER_DRAW in _moves: _moves.remove(OFFER_DRAW)
         if RESIGN in _moves: _moves.remove(RESIGN)
 
-        return np.random.choice(_moves)
+        return {"move_code": np.random.choice(_moves)}
     
     def inform(self, _move: str):
         ...
@@ -347,7 +376,89 @@ class cli_player(player):
             if _move not in self.board.moves:
                 print("That was not a valid move.")
             else:
-                return _move
+                return {"move_code": _move}
 
     def inform(self, _move: str):
         print(MOVE_STRINGS[_move] + " was played.")
+
+class connect_4_game(two_player_game):
+    def __init__(self, _board: connect_4_board, black_player: player, red_player: player) -> None:
+        super().__init__(_board, black_player, red_player)
+    
+    def play_tourney(self, rounds: int = 1) -> dict:
+        draws = 0
+        for n in range(rounds):
+            # Start by initializing the game
+            self.board.reset()
+            board_list = [self.board.copy()]
+            if n % 2 == 0:
+                it = iter(cycle([self.player_1, self.player_2]))
+            else:
+                it = iter(cycle([self.player_2, self.player_1]))
+            current_player = next(it)
+
+            while not self.board.is_terminal:
+                # Have the player choose a move and make the move
+                _move = current_player.move()
+                self.board.move(_move["move_code"])
+
+                # If the move was successful then add the new board state to the list
+                board_list.append(self.board)
+                
+                # Move to the next player
+                current_player = next(it)
+
+                # Inform them of the move made by the other player
+                current_player.inform(_move)
+            if self.board.id == DRAW:
+                draws += 1  
+            else:
+                current_player.wins += 1
+        return draws     
+
+    
+    def mcts_play(self, rounds: int = 1) -> dict:
+        d = {
+            "games": []
+        }
+        for n in range(rounds):
+            # Start by initializing the game
+            self.board.reset()
+            board_list = [self.board.copy()]
+            if n % 2 == 0:
+                it = iter(cycle([self.player_1, self.player_2]))
+            else:
+                it = iter(cycle([self.player_2, self.player_1]))
+            current_player = next(it)
+
+            while not self.board.is_terminal:
+                # Have the player choose a move and make the move
+                _move = current_player.move()
+                self.board.move(_move["move_code"])
+                _policy = np.zeros((7 + 4,))
+                for _node in _move["all_nodes"]:
+                    _policy += _node.pi * MOVE_ONE_HOT[_node.move]
+
+                self.board.policy = _policy
+                # If the move was successful then add the new board state to the list
+                board_list.append(self.board)
+                
+                # Move to the next player
+                current_player = next(it)
+
+                # Inform them of the move made by the other player
+                current_player.inform(_move["move_code"])
+            result = self.board.id
+            if result == BLACK_WINS:
+                r = 1
+            elif result == RED_WINS:
+                r = -1
+            elif result == DRAW:
+                r = 0
+            else:
+                raise Exception("Somehow the last board in a game was not a terminal state, it was " + result)            
+            d["games"].append({
+                "boards": board_list,
+                "result": r,
+            })
+        return d

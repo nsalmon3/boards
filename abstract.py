@@ -79,7 +79,7 @@ class player(ABC):
         self.board = _board
 
     @abstractmethod
-    def move(self) -> str:
+    def move(self) -> dict:
         """
         The logic that decides what move to make. The primary difference between players is contained here.
         """
@@ -93,12 +93,13 @@ class player(ABC):
         """
         ...
 
-class sequential_game():
+class two_player_game():
     """
     This class fully handles running a game where players take turns in order.
     """
-    def __init__(self, _board: board, *players: player) -> None:
-        self.players = players
+    def __init__(self, _board: board, player_1: player, player_2: player) -> None:
+        self.player_1 = player_1
+        self.player_2 = player_2
         self.board = _board
 
     def play(self) -> dict:
@@ -108,13 +109,13 @@ class sequential_game():
         
         # Start by initializing the game
         self.board.reset()
-        board_list = [self.board.serialize()]
-        it = iter(cycle(self.players))
+        board_list = [self.board.copy()]
+        it = iter(cycle([self.player_1, self.player_2]))
         current_player = next(it)
 
         while not self.board.is_terminal:
             # Have the player choose a move
-            _move = current_player.move()
+            _move = current_player.move()["move_code"]
 
             # Try to make the chosen move
             try:
@@ -125,16 +126,13 @@ class sequential_game():
                     continue
 
             # If the move was successful then add the new board state to the list
-            board_list.append(self.board.serialize())
-            
-            # Inform other players of the move made
-            for informed_player in self.players:
-                if informed_player == current_player:
-                    continue
-                informed_player.inform(_move)
+            board_list.append(self.board.copy())
             
             # Move to the next player
             current_player = next(it)
+
+            # Inform them of the move made by the other player
+            current_player.inform(_move)
 
         # Now the game is finished
         # I'm leaving this as a dictionary just because idk if in the future I'd like to report more info
