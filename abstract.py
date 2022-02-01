@@ -3,6 +3,13 @@ from itertools import cycle
 
 from exceptions import InvalidMoveException
 
+class bid(type):
+    def __str__(self):
+        if hasattr(self, 'as_string'):
+            return self.as_string
+        else:
+            return 'bid_has_no_string'
+
 class board(ABC):
     """
     This is the abstract board class defining how boards must be defined.
@@ -24,14 +31,14 @@ class board(ABC):
 
     @property
     @abstractmethod
-    def moves(self) -> 'list[str]':
+    def moves(self) -> 'list[bid]':
         """
         Returns the list of valid moves in the current board state.
         """
         ...
 
     @abstractmethod
-    def move(self, move: str, inplace: bool = True) -> 'board':
+    def move(self, move: bid, inplace: bool = True) -> 'board':
         """
         Attempts to make a move, and returns the updated board after the move.
         inplace describes whether it is returning a reference to the same board or a new board.
@@ -79,14 +86,14 @@ class player(ABC):
         self.board = _board
 
     @abstractmethod
-    def move(self) -> dict:
+    def move(self) -> bid:
         """
         The logic that decides what move to make. The primary difference between players is contained here.
         """
         ...
 
     @abstractmethod
-    def inform(self, _move: str):
+    def inform(self, _move: bid):
         """
         There are some players that need to know when other players make moves.
         A game can call this on each player every time a move is made, so that players get updates on other players moves.
@@ -109,7 +116,6 @@ class two_player_game():
         
         # Start by initializing the game
         self.board.reset()
-        board_list = [self.board.copy()]
         it = iter(cycle([self.player_1, self.player_2]))
         current_player = next(it)
 
@@ -124,19 +130,9 @@ class two_player_game():
                 print(*e.args)
                 if input("Try again? [y/n]") == 'y':
                     continue
-
-            # If the move was successful then add the new board state to the list
-            board_list.append(self.board.copy())
             
             # Move to the next player
             current_player = next(it)
 
             # Inform them of the move made by the other player
             current_player.inform(_move)
-
-        # Now the game is finished
-        # I'm leaving this as a dictionary just because idk if in the future I'd like to report more info
-        # Or, have optionally different types of returns based on configuration settings.
-        return {
-            "boards": board_list
-        }

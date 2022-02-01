@@ -5,10 +5,7 @@ from abstract import *
 
 class node():
     def __init__(self, parent = None, children = None, **kwargs):
-        if children is None:
-            self.children = list()
-        else:
-            self.children = children
+        self.children = children
         self.parent = parent
         for arg in kwargs:
             self.__dict__[arg] = kwargs[arg]
@@ -17,9 +14,9 @@ class node():
         return str(vars(self))
 
     def add(self, *_nodes):
+        if self.children is None:
+            self.children = list()
         if _nodes == None:
-            return
-        elif len(_nodes) == 0:
             return
         for _node in _nodes:
             if _node.parent is not None:
@@ -28,7 +25,7 @@ class node():
             self.children.append(_node)
 
     def is_leaf(self):
-        return len(self.children) == 0
+        return self.children is None or len(self.children) == 0
 
     def is_root(self):
         return self.parent == None
@@ -38,6 +35,8 @@ class node():
         return self
 
     def remove(self, *_nodes):
+        if self.children is None:
+            raise Exception("Tried to remove nodes from node with no children!")
         for _node in _nodes:
             if _node not in self.children:
                 raise ValueError("Attempted to remove a node which is not a child!")
@@ -45,9 +44,9 @@ class node():
 
 class mcts_node(node):
     def __init__(self,
-        _move: str = None,
+        _move = None,
         parent: 'mcts_node' = None,
-        children: 'mcts_node' = None,
+        children: 'list[mcts_node]' = None,
         N: int = 0,
         W: float = 0,
         Q: float = 0, 
@@ -56,7 +55,7 @@ class mcts_node(node):
 
         super().__init__(parent, children, move = _move, N = N, W = W, Q = Q, P = P, **kwargs)
 
-_DEFAULT_PROPS = 1000
+_DEFAULT_PROPS = 10
 _TEMPERATURE = 1
 _EXPLORATION_CONSTANT = 1
 
@@ -80,14 +79,6 @@ class mcts():
         The idea is that a virtual board gets passed around as we traverse the tree.
         The root board tells the decision function from what perspective we are evaluating the virtual board from.
         This is mostly to obtain which player is evaluating the virtual board.
-        
-        root:
-            This is the starting point for the tree search.
-            The important point to note here is that we pass a board upon initialization.
-            This means the tree search will start here.
-            However, as we make moves and the game progresses, the remaining subtrees are retained.
-            So re-initializing the mcts resets the tree.
-            We want to initialize once and play out the entire game before initializing again.
         """
 
         # Begin by initializing
@@ -102,7 +93,7 @@ class mcts():
             _board = self.board.copy()
             while not _node.is_leaf():
                 _max = -np.Inf
-                _max_nodes = None
+                _max_nodes = list()
                 _sqrt = np.sqrt(sum(_n.N for _n in _node.children))
                 for child in _node.children:
                     _U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
@@ -128,9 +119,9 @@ class mcts():
                 _node.Q = _node.W / _node.N
                 _node = _node.parent
     
-    def move(self, _move: str):
-        # If a leaf node is the root node, then it has never been visited and we essentially start a new tree under it.
-        if self.root_node.children == []:
+    def move(self, _move):
+        # If the root node is a leaf, then it has never been visited and we essentially start a new tree under it.
+        if self.root_node.children is None:
             self.root_node = mcts_node()
             return
         
@@ -139,45 +130,44 @@ class mcts():
             if child.move == _move:
                 self.root_node = child
                 return
-        raise ValueError("mcts tried to make move" + _move + "on board:\n" + str(self.board))
+        raise ValueError("mcts tried to make move " + _move.as_string + " on board:\n" + str(self.board))
     
-    def run_deterministically(self, n: int = _DEFAULT_PROPS) -> str:
+    def run_deterministically(self, n: int = _DEFAULT_PROPS):
+        """
+        Runs looking to make the best move it can. Returns the move.
+        """
         self._propogate(n)
 
-
-        ### QUESTIONABLE BEHAVIOR HERE ###
-        # If the root node has no children after propogation, that means it is a true leaf in the tree
-        # As it stands, we will simply return this node after being asked to make a move here.
-        # Might be better to define a custom exception to throw instead.
-        if self.root_node.children == []:
-            raise Exception("huh")
+        # If the root node has no children after propogation
+        if self.root_node.children is None:
+            return None
 
         _max = -np.Inf
-        _max_node = None
-        _sqrt = np.sqrt(sum(_n.N for _n in self.root_node.children))
+        _max_nodes = list()
+        _sqrt = np.sqrt(sum(n.N for n in self.root_node.children))
         for child in self.root_node.children:
-            _U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
-            if child.Q + _U > _max:
-                _max = child.Q + _U
-                _max_node = child
+            U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
+            if child.Q + U > _max:
+                _max = child.Q + U
+                _max_nodes = [child]
+            elif child.Q + U == _max:
+                _max_nodes.append(child)
 
-        all_nodes = self.root_node.children
-        self.root_node = _max_node.prune()
+        self.root_node = np.random.choice(_max_nodes).prune()
 
-        return {
-            "move_code": self.root_node.move,
-            "all_nodes": all_nodes
-        }
+        return self.root_node.move
 
     def run_stochastically(self, n: int = _DEFAULT_PROPS) -> dict:
+        """
+        Runs looking to explore and practice the game. Returns a dictionary of relevant training data for trainer.
+        """
         self._propogate(n)
 
-        ### QUESTIONABLE BEHAVIOR HERE ###
-        # If the root node has no children after propogation, that means it is a true leaf in the tree
-        # As it stands, we will simply return this node after being asked to make a move here.
-        # Might be better to define a custom exception to throw instead.
-        if self.root_node.children == []:
-            raise Exception("huh")
+        if self.root_node.children is None:
+            return {
+                "move": None,
+                "all_nodes": None
+            }
 
         p = [child.N ** (1 / _TEMPERATURE) for child in self.root_node.children]
         p = list(map(lambda x: x / sum(p), p))
@@ -186,22 +176,22 @@ class mcts():
         self.root_node = np.random.choice(self.root_node.children, p = p).prune()
 
         for _node in all_nodes:
-            _node.pi = (_node.N ** (1 / _TEMPERATURE)) / _sum
+            _node.P = (_node.N ** (1 / _TEMPERATURE)) / _sum
 
         return {
-            "move_code": self.root_node.move,
+            "move": self.root_node.move,
             "all_nodes": all_nodes
         }
 
 class mcts_player(player):
-    def __init__(self, _board, decision_func):
+    def __init__(self, _board: board, decision_func: Callable[[board, board], dict]):
         super().__init__(_board)
         self.mcts = mcts(_board, decision_func)
 
-    def move(self) -> dict:
+    def move(self) -> bid:
         return self.mcts.run_deterministically()
     
-    def inform(self, _move: str):
+    def inform(self, _move: bid):
         self.mcts.move(_move)
 
 class mcts_training_player(player):
@@ -212,5 +202,5 @@ class mcts_training_player(player):
     def move(self) -> dict:
         return self.mcts.run_stochastically()
     
-    def inform(self, _move: str):
+    def inform(self, _move: bid):
         self.mcts.move(_move)
