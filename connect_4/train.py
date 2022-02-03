@@ -1,26 +1,37 @@
 from tensorflow.keras import Model
-from tensorflow.keras.layers import (Input, Dense, Conv2D, Flatten, Concatenate)
-from tensorflow.keras.losses import (Loss, CategoricalCrossentropy, MeanSquaredError)
-from tensorflow.keras.models import clone_model
+from tensorflow.keras.activations import (relu)
+from tensorflow.keras.layers import (Input, Dense, Conv2D, Flatten, Concatenate, BatchNormalization, Add)
+from tensorflow.keras.losses import (CategoricalCrossentropy, MeanSquaredError)
+from tensorflow.keras.models import (load_model, clone_model)
+from tensorflow.keras.regularizers import (L2)
 import json
-import random
 
 from connect_4.implementations import *
-from tree import (mcts_node, mcts)
+from tree import (mcts_node, mcts, mcts_player)
+
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 def naive_decision_function(root_board: connect_4_board, _board: connect_4_board):
     if _board.bid == BLACK_WINS:
-        if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_OFFERS_DRAW or root_board.bid == BLACK_WINS:
+        if root_board.bid == BLACK_TO_MOVE or root_board.bid == BLACK_WINS:
             v = 1
-        elif root_board.bid == RED_TO_MOVE or root_board.bid == BLACK_OFFERS_DRAW or root_board.bid == RED_WINS:
+        elif root_board.bid == RED_TO_MOVE or root_board.bid == RED_WINS:
             v = -1
         else:
             raise ValueError("This is only reached if DRAW happens downstream from BLACK_WINS. This should not be possible!")
         p = []
     elif _board.bid == RED_WINS:
-        if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_OFFERS_DRAW or root_board.bid == BLACK_WINS:
+        if root_board.bid == BLACK_TO_MOVE or root_board.bid == BLACK_WINS:
             v = -1
-        elif root_board.bid == RED_TO_MOVE or root_board.bid == BLACK_OFFERS_DRAW or root_board.bid == RED_WINS:
+        elif root_board.bid == RED_TO_MOVE or root_board.bid == RED_WINS:
             v = 1
         else:
             raise ValueError("This is only reached if DRAW happens downstream from RED_WINS. This should not be possible!")
@@ -28,9 +39,6 @@ def naive_decision_function(root_board: connect_4_board, _board: connect_4_board
     else:
         v = 0
         _moves = _board.moves
-        if OFFER_DRAW in _moves: _moves.remove(OFFER_DRAW)
-        if DECLINE_DRAW in _moves: _moves.remove(DECLINE_DRAW)
-        if RESIGN in _moves: _moves.remove(RESIGN)
         _len = len(_moves)
         p = list(mcts_node(_move, P = 1 / _len) for _move in _moves)
 
@@ -40,16 +48,19 @@ def naive_decision_function(root_board: connect_4_board, _board: connect_4_board
     }
 
 # The number of games for a training network to play against itself before retraining and evaluation
-_SELF_PLAY_GAMES = 100
+_SELF_PLAY_GAMES = 2500
 
 # The number of games that will be written to disk for future training sessions
-_GAMES_STORED = 10000
+_GAMES_STORED = 50000
 
 # The number of boards to be sampled from the _GAMES_STORED games for weight training
-_SAMPLE_SIZE = 1000
+_SAMPLE_SIZE = 256
+
+# The number of times to randomly sample games and train before evaluation
+_TRAINING_LOOPS = 100
 
 # The number of games to play against the best network to evaluate a newly trained network
-_EVALUTATION_GAMES = 100
+_EVALUTATION_GAMES = 40
 
 # The percentage of games that must be won by a new network to be declared the new best network
 _WIN_THRESHOLD = 0.55
@@ -57,65 +68,77 @@ _WIN_THRESHOLD = 0.55
 # The relative directory to store games
 _GAMES_DIR = "connect_4\\games\\"
 
-_mean_squared_error = MeanSquaredError()
-_categorical_cross_entropy = CategoricalCrossentropy()
+# The relative directory to store models
+_MODEL_DIR = "connect_4\\models\\"
 
-class _default_loss(Loss):
-    def call(self, y_true, y_pred):
-        return _mean_squared_error.call(y_true['value'], y_pred['value']) + _categorical_cross_entropy(y_true['policy'], y_pred['policy'])
+# This is the policy used for terminal boards. There isn't a clear choice here, so we make a global for ease of edit.
+class _NULL_POLICY:
+    as_dict = {
+        PLACE_1: 1 / 7,
+        PLACE_2: 1 / 7,
+        PLACE_3: 1 / 7,
+        PLACE_4: 1 / 7,
+        PLACE_5: 1 / 7,
+        PLACE_6: 1 / 7,
+        PLACE_7: 1 / 7
+    }
 
-class connect_4_model(Model):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    as_array = np.full((7,), 1 / 7)
 
-        # Inputs
-        self.grid_input = Input(shape = (6, 7), name = "grid")
-        self.bid_input = Input(shape = (7, ), name = 'bid')
+def _default_loss(y_true, y_pred):
+        mse = MeanSquaredError()
+        cat = CategoricalCrossentropy()
+        return mse(y_true[0], y_pred[0]) + cat(y_true[1], y_pred[1])
 
-        # Layers for board convolution embedding
-        self.convolutional_1 = Conv2D(64, (3, 3), padding = "same")
-        self.convolutional_2 = Conv2D(32, (3, 3), padding = "same")
+def _convolutional_layer(inputs):
+    outputs = Conv2D(32, (3,3), padding='same', kernel_regularizer = L2(), bias_regularizer = L2())(inputs)
+    outputs = BatchNormalization()(outputs)
+    return relu(outputs)
 
-        # Layers after concatenation
-        self.dense_1 = Dense(16)
-        self.dense_2 = Dense(16)
-        self.dense_3 = Dense(16)
-        self.policy_head = Dense(7 + 4, activation = 'softmax')
-        self.value_head = Dense(1, activation='tanh')
+def _residual_layer(inputs):
+    outputs = Conv2D(32, (3,3), padding='same', kernel_regularizer = L2(), bias_regularizer = L2())(inputs)
+    outputs = BatchNormalization()(outputs)
+    outputs = relu(outputs)
+
+    outputs = Conv2D(32, (3,3), padding='same', kernel_regularizer = L2(), bias_regularizer = L2())(outputs)
+    outputs = BatchNormalization()(outputs)
+    outputs = Add()([inputs,outputs])
+    return relu(outputs)
+
+class connect_4_model():
+    def __init__(self, name: str, model: Model = None):
+        if model is not None:
+            self._model = model
+        else:
+            # Inputs
+            _grid_input = Input(shape = (6, 7, 1), name = "grid")
+            _bid_input = Input(shape = (5, ), name = 'bid')
+
+            # Layers for board convolution embedding
+            _grid_internal = _convolutional_layer(_grid_input)
+            _grid_internal = _residual_layer(_grid_internal)
+            _grid_internal = Flatten()(_grid_internal)
+
+            _internal = Concatenate()([_grid_internal, _bid_input])
+
+            # Layers after concatenation
+            _internal = Dense(16, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
+            _policy_head = Dense(7, activation = 'softmax')(_internal)
+            _value_head = Dense(1, activation='tanh')(_internal)
+
+            self._model = Model(inputs = [_grid_input, _bid_input], outputs = [_value_head, _policy_head])
+        
+        self.name = name
+        self._model.compile(loss=_default_loss, optimizer = 'adam')
     
-    def call(self, inputs):
-        board_embedding = self.convolutional_1(inputs["grid"])
-        board_embedding = self.convolutional_2(board_embedding)
-        board_embedding = Flatten()(board_embedding)
+    def __call__(self, _board: connect_4_board):
+        _grid = _board.grid.reshape((1,6,7,1))
+        _bid = _board.bid.as_array.reshape((1,5))
+        r = self._model([_grid, _bid])
+        _policy = r[1]
 
-        x = Concatenate()([board_embedding, inputs["bid"]])
-        x = self.dense_1(x)
-        x = self.dense_2(x)
-        x = self.dense_3(x)
         return {
-            "value": self.value_head(x),
-            "policy": self.policy_head(x)
-        }
-    
-    def copy(self):
-        new_model = type(self)()
-        new_model.build({
-            'grid': (None, 6, 7, 1),
-            'bid': (None, 7)
-        })
-        new_model.compile(loss = _default_loss)
-        new_model.set_weights(self.get_weights())
-        return new_model
-    
-    def board_call(self, _board: connect_4_board):
-        grid = _board.grid.reshape((1,6,7,1))
-        _id = _board.bid.as_array.reshape((1,7))
-
-        r = self.call({'grid': grid, 'bid': _id})
-        _policy = r['policy']
-
-        return {
-            "value": r["value"][0,0].numpy(),
+            "value": r[0][0,0].numpy(),
             "policy": {
                 PLACE_1: _policy[0, PLACE_1.index].numpy(),
                 PLACE_2: _policy[0, PLACE_2.index].numpy(),
@@ -123,30 +146,42 @@ class connect_4_model(Model):
                 PLACE_4: _policy[0, PLACE_4.index].numpy(),
                 PLACE_5: _policy[0, PLACE_5.index].numpy(),
                 PLACE_6: _policy[0, PLACE_6.index].numpy(),
-                PLACE_7: _policy[0, PLACE_7.index].numpy(),
-
-                OFFER_DRAW: _policy[0, OFFER_DRAW.index].numpy(),
-                ACCEPT_DRAW: _policy[0, ACCEPT_DRAW.index].numpy(),
-                DECLINE_DRAW: _policy[0, DECLINE_DRAW.index].numpy(),
-                RESIGN: _policy[0, RESIGN.index].numpy()
+                PLACE_7: _policy[0, PLACE_7.index].numpy()
             }
         }
+    
+    def fit(self, **kwargs):
+        return self._model.fit(**kwargs)
+    
+    def copy(self) -> 'connect_4_model':
+        return type(self)(name = self.name, model = clone_model(self._model))
+    
+    def save(self):
+        self._model.save(_MODEL_DIR + self.name)
 
+    @classmethod
+    def load(cls, name: str) -> 'connect_4_model':
+        return cls(name = name, model = load_model(_MODEL_DIR + name, custom_objects={'_default_loss': _default_loss}))
+    
 class mcts_trainer():
-    def __init__(self, _model: connect_4_model, game_pool_name: str = "best") -> None:
+    def __init__(self, model_name: str = "best", game_pool_name: str = "best") -> None:
         """
         game_pool: This is a name for the pool of games the trainer will use for training.
             If no game_pool.json file exists in _GAMES_DIR, then a new one will be made.
         """
-
         # Start by initializing the model
-        self.model = _model
-        self.model.compile(loss = _default_loss)
+        try:
+            self.model = connect_4_model.load(model_name)
+        except Exception as e:
+            logging.error(e)
+            logging.info("Creating blank model '" + model_name + "' and starting train loop.")
+            self.model = connect_4_model(model_name)
 
         # Now try to load in games in the given game_pool, defaulting to a fresh pool if the file doesn't exist.
         self.game_pool_name = game_pool_name
+        self.model_name = model_name
         try:
-            with open(_GAMES_DIR + game_pool_name, "r") as f:
+            with open(_GAMES_DIR + game_pool_name + '.json', "r") as f:
                 self.game_pool = json.load(f)
         except FileNotFoundError:
             self.game_pool = {
@@ -155,14 +190,43 @@ class mcts_trainer():
         
         # Deserialize the boards
         for _game in self.game_pool['games']:
-            for _board in _game['boards']:
-                _board["board"] = connect_4_board.deserialize(_board["serialized"])
+            for b_and_p in _game['b_and_p']:
+                b_and_p["board"] = connect_4_board.dejsonify(b_and_p["board"])
+                b_and_p['policy'] = np.array(b_and_p['policy'])
+            _game['value'] = np.array(_game['value'])
 
     @property
     def decision_func(self):
         def f(root_board: connect_4_board, _board: connect_4_board):
+            # We help the neural net learn by allowing the mcts to know about terminal boards
+            # By having this first check for terminal boards, the network will learn it's policy faster... at least in theory
+            if _board.bid == BLACK_WINS:
+                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                    v = 1
+                else:
+                    v = -1
+                return {
+                    "value": v,
+                    "policy": []
+                }
+            elif _board.bid == RED_WINS:
+                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                    v = -1
+                else:
+                    v = 1
+                return {
+                    "value": v,
+                    "policy": []
+                }
+            elif _board.bid == DRAW:
+                v = 0
+                return {
+                    "value": v,
+                    "policy": []
+                }
+            
             # Call the model on the virtual board
-            r = self.model.board_call(_board)
+            r = self.model(_board)
             value_head = r["value"]
             policy_head = r["policy"]
 
@@ -170,7 +234,7 @@ class mcts_trainer():
             # The first if means it is black's turn, so the network outputs their true value
             # If it's not black's turn, then negate the value so it's from the persepctive of red
             # Technically the draw one is ambiguous...
-            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_OFFERS_DRAW or root_board.bid == RED_WINS or root_board.bid == DRAW:
+            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
                 v = value_head
             else:
                 v = -value_head
@@ -192,8 +256,34 @@ class mcts_trainer():
     @staticmethod
     def gen_decision_func(model: connect_4_model):
         def f(root_board: connect_4_board, _board: connect_4_board):
+            # We help the neural net learn by allowing the mcts to know about terminal boards
+            # By having this first check for terminal boards, the network will learn it's policy faster... at least in theory
+            if _board.bid == BLACK_WINS:
+                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                    v = 1
+                else:
+                    v = -1
+                return {
+                    "value": v,
+                    "policy": []
+                }
+            elif _board.bid == RED_WINS:
+                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                    v = -1
+                else:
+                    v = 1
+                return {
+                    "value": v,
+                    "policy": []
+                }
+            elif _board.bid == DRAW:
+                v = 0
+                return {
+                    "value": v,
+                    "policy": []
+                }
             # Call the model on the virtual board
-            r = model.board_call(_board)
+            r = model(_board)
             value_head = r["value"]
             policy_head = r["policy"]
 
@@ -201,7 +291,7 @@ class mcts_trainer():
             # The first if means it is black's turn, so the network outputs their true value
             # If it's not black's turn, then negate the value so it's from the persepctive of red
             # Technically the draw one is ambiguous...
-            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_OFFERS_DRAW or root_board.bid == RED_WINS or root_board.bid == DRAW:
+            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
                 v = value_head
             else:
                 v = -value_head
@@ -211,7 +301,7 @@ class mcts_trainer():
             for _move in _board.moves:
                 p.append(mcts_node(
                     _move = _move,
-                    P = np.dot(policy_head, _move.as_array)
+                    P = policy_head[_move]
                 ))
             
             return {
@@ -224,18 +314,18 @@ class mcts_trainer():
         serialized = list()
         for game in self.game_pool['games']:
             serialized.append({
-                'b_and_p': {
-                    'board': game['board'].serialize(),
-                    'policy': game['policy'].tolist()
-                },
+                'b_and_p': [{
+                    'board': b_and_p['board'].jsonify(),
+                    'policy': b_and_p['policy'].tolist()
+                } for b_and_p in game['b_and_p']],
                 'value': game['value'].tolist()
             })
-        with open(_GAMES_DIR + self.game_pool_name, 'w') as f:
+        with open(_GAMES_DIR + self.game_pool_name + '.json', 'w') as f:
             f.truncate(0)
             json.dump({
                 'games': serialized
             }, f)
-
+    
     def self_play(self, rounds: int = _SELF_PLAY_GAMES):
         for _ in range(rounds):
             # We being by initializing two instances of mcts on a shared board
@@ -260,7 +350,7 @@ class mcts_trainer():
                 all_nodes = _dict['all_nodes'] # This is a list of all the nodes that were possible moves, with true probabilities attached.
 
                 # Now that the mcts has finished, we want to add the true probabilities to training data
-                p = np.zeros((7 + 4,), dtype = float) # start by setting all probabilities equal to zero
+                p = np.zeros((7,), dtype = float) # start by setting all probabilities equal to zero
                 for _node in all_nodes:
                     p[_node.move.index] = _node.P # recall that each move class has an attr index for this exact moment!
 
@@ -279,6 +369,14 @@ class mcts_trainer():
                 # Inform it of the previous move that was made
                 current_mcts.move(_move)
             
+            # Now the game is over, so we append the final board
+            # There is not a clear policy to choose for the final board,
+            # So we have globalized it to be consistent.
+            game['b_and_p'].append({
+                'board': b.copy(),
+                'policy': _NULL_POLICY.as_array
+            })
+
             # Once the game is over, we want to record the result
             # We store it in a numpy array because the neural network prefers this
             # When we serialize things will be stored differently
@@ -289,7 +387,8 @@ class mcts_trainer():
             else:
                 game['value'] = np.array([0.0])
             
-            # Finally add this game to the game pool
+            logging.info("Game {0}/{1} of self play has finished.".format(_ + 1, rounds))
+
             self.game_pool['games'].append(game)
 
         # Once all the games have been played, prune the game pool to only include the desired history
@@ -297,33 +396,40 @@ class mcts_trainer():
     
     def train_and_eval(self,
         sample_size: int = _SAMPLE_SIZE,
-        batch_size: int = 256,
+        training_loops: int = _TRAINING_LOOPS,
+        batch_size: int = _SAMPLE_SIZE,
         epochs: int = 64,
         eval_games: int = _EVALUTATION_GAMES,
         thresh: float = _WIN_THRESHOLD):
 
         # In the train and eval step, we copy the best model, train it, and play the copy against the best
         trainee = self.model.copy()
-
-        # Pick our random games and set up the training data
-        x_train = {
-            'grid': np.empty((sample_size, 6, 7, 1)),
-            'bid': np.empty((sample_size, 7))
-        }
-        y_train = {
-            'value': np.empty((sample_size,)),
-            'policy': np.empty((sample_size, 7 + 4))
-        }
-        training_games = np.random.choice(self.game_pool['games'], sample_size)
-        for i, game in enumerate(training_games):
-            _dict = np.random.choice(game['b_and_p'])
-            x_train['grid'][i] = _dict['board'].grid.reshape((6, 7, 1))
-            x_train['bid'][i] = _dict['board'].bid.as_array
-            y_train['value'][i] = game['value']
-            y_train['policy'][i] = _dict['policy']
-        
-        # Actually train the model on this data
-        trainee.fit(x = x_train, y = y_train, batch_size = batch_size, epochs = epochs)
+        for _ in range(training_loops):
+            # Pick our random games and set up the training data
+            x_train = {
+                'grid': np.empty((sample_size, 6, 7, 1)),
+                'bid': np.empty((sample_size, 5))
+            }
+            y_train = {
+                'value': np.empty((sample_size, 1)),
+                'policy': np.empty((sample_size, 7))
+            }
+            training_games = np.random.choice(self.game_pool['games'], sample_size)
+            for i, game in enumerate(training_games):
+                _dict = np.random.choice(game['b_and_p'])
+                x_train['grid'][i] = _dict['board'].grid.reshape((6, 7, 1))
+                x_train['bid'][i] = _dict['board'].bid.as_array
+                y_train['value'][i] = game['value']
+                y_train['policy'][i] = _dict['policy']
+            
+            # Actually train the model on this data
+            trainee.fit(
+                x = [x_train['grid'], x_train['bid']],
+                y = [y_train['value'], y_train['policy']],
+                batch_size = batch_size,
+                epochs = epochs,
+                verbose = 0)
+            logging.info("Training loop {0}/{1} has finished.".format(_ + 1, training_loops))
         
         # Now play the trainee against the best model
         b = connect_4_board()
@@ -335,6 +441,10 @@ class mcts_trainer():
         draws = 0
 
         for n in range(eval_games):
+            b.reset()
+            trainee_player.reset()
+            best_player.reset()
+
             if n % 2 == 0:
                 black_player = trainee_player
                 red_player = best_player
@@ -353,11 +463,12 @@ class mcts_trainer():
                 b.move(_move)
 
                 # Move to the next player
-                current_player= next(it)
+                current_player = next(it)
 
                 # Inform it of the previous move that was made
                 current_player.inform(_move)
-            
+            print('Final move: ', _move)
+            print(b)
             # Once the game is over, we want to record the result
             # We store it in a numpy array because the neural network prefers this
             # When we serialize things will be stored differently
@@ -367,7 +478,15 @@ class mcts_trainer():
                 red_player.wins += 1
             else:
                 draws += 1
+
+            logging.info("Game {0}/{1} of evaluation has finished.".format(n + 1, eval_games))
         
         # Now we check to see if the trainee player won enough games and declare it best if so
+        logging.info("Trainee: " + str(trainee_player.wins))
+        logging.info("Best: " + str(best_player.wins))
+        logging.info("Draws: " + str(draws))
         if trainee_player.wins / eval_games > thresh:
             self.model = trainee
+            logging.info("New best model!")
+        
+        self.model.save()

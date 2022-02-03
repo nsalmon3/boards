@@ -10,6 +10,27 @@ class bid(type):
         else:
             return 'bid_has_no_string'
 
+_BASE_ELO = 400
+_K = 30
+class elo():
+    def __init__(self, _elo: float = _BASE_ELO) -> None:
+        self._elo = _elo
+    
+    def __str__(self):
+        return str(self._elo)
+    
+    @property
+    def q(self):
+        return 10 ** (self._elo / _BASE_ELO)
+    
+    @classmethod
+    def E(cls, elo_a: 'elo', elo_b: 'elo') -> float:
+        return elo_a.q / (elo_a.q + elo_b.q)
+    
+    @classmethod
+    def update(cls, elo_a: 'elo', elo_b: 'elo', s_a: float, s_b: float):
+        elo_a._elo, elo_b._elo = elo_a._elo + _K * (s_a - cls.E(elo_a, elo_b)), elo_b._elo + _K * (s_b - cls.E(elo_b, elo_a))
+
 class board(ABC):
     """
     This is the abstract board class defining how boards must be defined.
@@ -61,15 +82,15 @@ class board(ABC):
         ...
 
     @abstractmethod
-    def serialize(self) -> str:
+    def jsonify(self) -> dict:
         """
-        A string representation of the board used for compact storage of the board on disk.
+        A dict representation of the board used for compact storage of the board on disk.
         """
         ...
 
     @classmethod
     @abstractmethod
-    def deserialize(cls, ser: str) -> 'board':
+    def dejsonify(cls, ser: str) -> 'board':
         """
         Takes in a string representation of the board, defined by the serialize function, and returns the corresponding board.
         """
@@ -81,9 +102,13 @@ class player(ABC):
     Players in a game will all have a reference to the same board.
     This allows for a better synchronization between all players.
     """
-    def __init__(self, _board: board) -> None:
+    def __init__(self, _board: board, _elo: elo = None) -> None:
         super().__init__()
         self.board = _board
+        if _elo is not None:
+            self.elo = _elo
+        else:
+            self.elo = elo()
 
     @abstractmethod
     def move(self) -> bid:

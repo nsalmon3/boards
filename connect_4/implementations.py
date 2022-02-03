@@ -3,122 +3,83 @@ import numpy as np
 
 from abstract import *
 from exceptions import *
-from tree import mcts_player
 
 class BLACK_TO_MOVE(metaclass = bid):
-    as_array = np.array((1., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((1., 0., 0., 0., 0.))
     as_string = "black to move"
     index = 0
     serialized = "BM"
 
 class RED_TO_MOVE(metaclass = bid):
-    as_array = np.array((0., 1., 0., 0., 0., 0., 0.))      
+    as_array = np.array((0., 1., 0., 0., 0.))      
     as_string = "red to move"
     index = 1     
     serialized = "RM"
 
-class BLACK_OFFERS_DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 1., 0., 0., 0., 0.))
-    as_string = "black offers draw"
-    index = 2
-    serialized = "BD"
-
-class RED_OFFERS_DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 0., 1., 0., 0., 0.))
-    as_string = "red offers draw"
-    index = 3
-    serialized = "RD"
-
 class BLACK_WINS(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 1., 0., 0.))
+    as_array = np.array((0., 0., 1., 0., 0.))
     as_string = "black wins"
-    index = 4
+    index = 2
     serialized = "BW"
 
 class RED_WINS(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 1., 0.))
+    as_array = np.array((0., 0., 0., 0., 1.))
     as_string = "red wins"
-    index = 5
+    index = 3
     serialized = "RW"
 
 class DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 0., 1.))
+    as_array = np.array((0., 0., 0., 0., 1.))
     as_string = "draw"
-    index = 6
+    index = 4
     serialized = "DR"
 
 class PLACE_1(metaclass = bid): 
-    as_array = np.array((1., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((1., 0., 0., 0., 0., 0., 0.))
     as_string = "place 1"
     index = 0
     serialized = "P1"
 
 class PLACE_2(metaclass = bid): 
-    as_array = np.array((0., 1., 0., 0., 0., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((0., 1., 0., 0., 0., 0., 0.))
     as_string = "place 2"
     index = 1
     serialized = "P2"
 
 class PLACE_3(metaclass = bid):
-    as_array = np.array((0., 0., 1., 0., 0., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((0., 0., 1., 0., 0., 0., 0.))
     as_string = "place 3"
     index = 2
     serialized = "P3"
 
 class PLACE_4(metaclass = bid):
-    as_array = np.array((0., 0., 0., 1., 0., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((0., 0., 0., 1., 0., 0., 0.))
     as_string = "place 4"
     index = 3
     serialized = "P4"
 
 class PLACE_5(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 1., 0., 0., 0., 0., 0., 0.))
+    as_array = np.array((0., 0., 0., 0., 1., 0., 0.))
     as_string = "place 5"
     index = 4
     serialized = "P5"
 
 class PLACE_6(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 1., 0., 0., 0., 0., 0.))
+    as_array = np.array((0., 0., 0., 0., 0., 1., 0.))
     as_string = "place 6"
     index = 5
     serialized = "P6"
 
 class PLACE_7(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 0., 1., 0., 0., 0., 0.))
+    as_array = np.array((0., 0., 0., 0., 0., 0., 1.))
     as_string = "place 7"
     index = 6
     serialized = "P7"
 
-class OFFER_DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 0., 0., 1., 0., 0., 0.))
-    as_string = "offer draw"
-    index = 7
-    serialized = "OD"
-
-class ACCEPT_DRAW(metaclass = bid): 
-    as_array = np.array((0., 0., 0., 0., 0., 0., 0., 0., 1., 0., 0.))
-    as_string = "accept draw"
-    index = 8
-    serialized = "AD"
-
-class DECLINE_DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 0., 0., 0., 0., 1., 0.))
-    as_string = "decline_draw"
-    index = 9
-    serialized = "DD"
-
-class RESIGN(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.))
-    as_string = "resign"
-    index = 10
-    serialized = "RE"
-
-def deserialize(_id: bid):
+def deserialize(_id: str):
     # Board ids
     if _id == BLACK_TO_MOVE.serialized: return BLACK_TO_MOVE
     elif _id == RED_TO_MOVE.serialized: return RED_TO_MOVE
-    elif _id == BLACK_OFFERS_DRAW.serialized: return BLACK_OFFERS_DRAW
-    elif _id == RED_OFFERS_DRAW.serialized: return RED_OFFERS_DRAW
     
     elif _id == BLACK_WINS.serialized: return BLACK_WINS
     elif _id == RED_WINS.serialized: return RED_WINS
@@ -132,11 +93,6 @@ def deserialize(_id: bid):
     elif _id == PLACE_5.serialized: return PLACE_5
     elif _id == PLACE_6.serialized: return PLACE_6
     elif _id == PLACE_7.serialized: return PLACE_7
-
-    elif _id == OFFER_DRAW.serialized: return OFFER_DRAW
-    elif _id == ACCEPT_DRAW.serialized: return ACCEPT_DRAW
-    elif _id == DECLINE_DRAW.serialized: return DECLINE_DRAW
-    elif _id == RESIGN.serialized: return RESIGN
 
     else: raise ValueError(str(_id) + " could not be deserialized for connect_4.")
 
@@ -159,6 +115,9 @@ class connect_4_board(board):
         if _id is None:
             _id = BLACK_TO_MOVE
 
+        # The draw flag stops a player from offering a draw after a decline of a draw offer.
+        self._draw_flag = False
+
         super().__init__(*args, grid = grid, bid = _id, **kwargs)
     
     def __str__(self):
@@ -177,8 +136,7 @@ class connect_4_board(board):
         return (
             self.bid.as_string + '\n' +
             _bs + '\n' +
-            "Available moves: " + str([move.as_string + " (" + move.serialized + ")" for move in self.moves])
-        )
+            "Available moves: " + str([move.as_string + " (" + move.serialized + ")" for move in self.moves]))
             
     def __getitem__(self, item):
         return self.grid[item]
@@ -200,18 +158,10 @@ class connect_4_board(board):
         # First check to see if the board is in a terminal state.
         if self.is_terminal: return l
 
-        # Then see if a draw was offered.
-        if self.bid == BLACK_OFFERS_DRAW or self.bid == RED_OFFERS_DRAW: 
-            return [ACCEPT_DRAW, DECLINE_DRAW]
-
-        # Next we loop through the top of the board to see which columns have openings.
+        # We loop through the top of the board to see which columns have openings.
         for i in range(len(self[0, :])):
             if self[0, i] == 0:
                 l.append(eval(f"PLACE_{i + 1}")) # This safely allows for us to change the id encoding later
-
-        # Finally add draw offer and resign
-        l.append(OFFER_DRAW)
-        l.append(RESIGN)
 
         return l
 
@@ -231,30 +181,6 @@ class connect_4_board(board):
         # If the operation is not in place, then copy the board to return a new copy
         if inplace: _board = self
         else: _board = self.copy()
-
-        # First check non piece-placing moves
-        # Since the first line validates the move for the board state, we can safely assume the correct logic below
-        if _move == OFFER_DRAW:
-            if _board.bid == BLACK_TO_MOVE:
-                _board.bid = BLACK_OFFERS_DRAW
-            else:
-                _board.bid = RED_OFFERS_DRAW
-            return _board
-        elif _move == ACCEPT_DRAW:
-            _board.bid = DRAW
-            return _board
-        elif _move == DECLINE_DRAW:
-            if _board.bid == BLACK_OFFERS_DRAW:
-                _board.bid = BLACK_TO_MOVE
-            else:
-                _board.bid = RED_TO_MOVE
-            return _board
-        elif _move == RESIGN:
-            if _board.bid == RED_TO_MOVE or _board.bid == BLACK_OFFERS_DRAW:
-                _board.bid = BLACK_WINS
-            else:
-                _board.bid = RED_WINS
-            return _board
 
         # Loop through the column and set the last open spot with the color
         # At this point we know we have PLACE_n as the move and
@@ -328,44 +254,24 @@ class connect_4_board(board):
 
         return _board
     
-    def serialize(self) -> str:
-        ser = self.bid.serialized + ':'
-        for i in range(6):
-            for j in range(7):
-                ser += str(self[i,j])
-        return ser
+    def jsonify(self) -> dict:
+        return {
+            'grid': self.grid.tolist(),
+            'bid': self.bid.serialized
+        }
 
     @classmethod
-    def deserialize(cls, ser: str) -> 'connect_4_board':
-        l = ser.split(":")
-
-        _id = deserialize(l[0])
-        
-        it = iter(itertools.product(range(6), range(7)))
-        _grid_str = l[1]
-        _grid = np.full((6,7), 0)
-        i = 0
-        while i < len(_grid_str):
-            tpl = next(it)
-            if _grid_str[i] == "-":
-                _grid[tpl[0],tpl[1]] = -1
-                i += 2
-            else:
-                _grid[tpl[0], tpl[1]] = _grid_str[i]
-                i += 1
-        
-        return cls(grid = _grid, _id = _id)
+    def dejsonify(cls, d: dict) -> 'connect_4_board':
+        _grid = np.array(d['grid'])
+        _bid = deserialize(d['bid'])
+        return connect_4_board(grid = _grid, _id = _bid)
 
 class random_player(player):
     """
     This player makes random moves that are not draw offers or resignations
     """
     def move(self):
-        _moves = self.board.moves
-        if OFFER_DRAW in _moves: _moves.remove(OFFER_DRAW)
-        if RESIGN in _moves: _moves.remove(RESIGN)
-
-        return np.random.choice(_moves)
+        return np.random.choice(self.board.moves)
     
     def inform(self, _move: bid):
         ...
@@ -423,6 +329,11 @@ class connect_4_game(two_player_game):
                 draws += 1  
             else:
                 current_player.wins += 1
+        
+        _ = self.player_1.wins - self.player_2.wins
+        # Update the elos of the players
+        elo.update(self.player_1.elo, self.player_2.elo, _, -_)
+
         return {
             'player_1': self.player_1.wins,
             'player_2': self.player_2.wins,

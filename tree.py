@@ -55,9 +55,9 @@ class mcts_node(node):
 
         super().__init__(parent, children, move = _move, N = N, W = W, Q = Q, P = P, **kwargs)
 
-_DEFAULT_PROPS = 10
+_DEFAULT_PROPS = 100
 _TEMPERATURE = 1
-_EXPLORATION_CONSTANT = 1
+_EXPLORATION_CONSTANT = 1 / 100
 
 class mcts():
     def __init__(self,
@@ -121,7 +121,7 @@ class mcts():
     
     def move(self, _move):
         # If the root node is a leaf, then it has never been visited and we essentially start a new tree under it.
-        if self.root_node.children is None:
+        if self.root_node.children is None or len(self.root_node.children) == 0:
             self.root_node = mcts_node()
             return
         
@@ -182,6 +182,9 @@ class mcts():
             "move": self.root_node.move,
             "all_nodes": all_nodes
         }
+    
+    def reset(self):
+        self.root_node = mcts_node()
 
 class mcts_player(player):
     def __init__(self, _board: board, decision_func: Callable[[board, board], dict]):
@@ -194,13 +197,5 @@ class mcts_player(player):
     def inform(self, _move: bid):
         self.mcts.move(_move)
 
-class mcts_training_player(player):
-    def __init__(self, _board: board, decision_func) -> None:
-        super().__init__(_board)
-        self.mcts = mcts(_board, decision_func)
-    
-    def move(self) -> dict:
-        return self.mcts.run_stochastically()
-    
-    def inform(self, _move: bid):
-        self.mcts.move(_move)
+    def reset(self):
+        self.mcts.reset()
