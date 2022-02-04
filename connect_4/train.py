@@ -467,8 +467,6 @@ class mcts_trainer():
 
                 # Inform it of the previous move that was made
                 current_player.inform(_move)
-            print('Final move: ', _move)
-            print(b)
             # Once the game is over, we want to record the result
             # We store it in a numpy array because the neural network prefers this
             # When we serialize things will be stored differently
