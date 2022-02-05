@@ -88,7 +88,7 @@ class _NULL_POLICY:
 def _default_loss(y_true, y_pred):
         mse = MeanSquaredError()
         cat = CategoricalCrossentropy()
-        return mse(y_true[0], y_pred[0]) + cat(y_true[1], y_pred[1])
+        return mse(y_true[:,0], y_pred[:,0]) + cat(y_true[:,1:], y_pred[:,1:])
 
 def _convolutional_layer(inputs):
     outputs = Conv2D(32, (3,3), padding='same', kernel_regularizer = L2(), bias_regularizer = L2())(inputs)
@@ -111,34 +111,35 @@ class connect_4_model():
             self._model = model
         else:
             # Inputs
-            _grid_input = Input(shape = (6, 7, 1), name = "grid")
-            _bid_input = Input(shape = (5, ), name = 'bid')
+            _input = Input(shape = (6, 7, 2))
 
             # Layers for board convolution embedding
-            _grid_internal = _convolutional_layer(_grid_input)
-            _grid_internal = _residual_layer(_grid_internal)
-            _grid_internal = Flatten()(_grid_internal)
-
-            _internal = Concatenate()([_grid_internal, _bid_input])
+            _internal = _convolutional_layer(_input)
+            _internal = _residual_layer(_internal)
+            _internal = Flatten()(_internal)
 
             # Layers after concatenation
+            _internal = Dense(32, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
             _internal = Dense(16, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
-            _policy_head = Dense(7, activation = 'softmax')(_internal)
-            _value_head = Dense(1, activation='tanh')(_internal)
+            _internal = Dense(8, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
+            _policy_head = Dense(7, kernel_regularizer = L2(), bias_regularizer = L2(), activation = 'softmax')(_internal)
+            _value_head = Dense(1, kernel_regularizer = L2(), bias_regularizer = L2(), activation='tanh')(_internal)
+            _output = Concatenate()([_value_head, _policy_head])
 
-            self._model = Model(inputs = [_grid_input, _bid_input], outputs = [_value_head, _policy_head])
+            self._model = Model(inputs = _input, outputs = _output)
         
         self.name = name
         self._model.compile(loss=_default_loss, optimizer = 'adam')
     
     def __call__(self, _board: connect_4_board):
-        _grid = _board.grid.reshape((1,6,7,1))
-        _bid = _board.bid.as_array.reshape((1,5))
-        r = self._model([_grid, _bid])
-        _policy = r[1]
+        _input = np.empty((1, 6, 7, 2))
+        _input[0,:,:,0] = _board.grid
+        _input[0,:,:,1] = _board.bid.as_array
+        r = self._model(_input)
+        _policy = r[:,1:]
 
         return {
-            "value": r[0][0,0].numpy(),
+            "value": r[0,0].numpy(),
             "policy": {
                 PLACE_1: _policy[0, PLACE_1.index].numpy(),
                 PLACE_2: _policy[0, PLACE_2.index].numpy(),
@@ -344,7 +345,7 @@ class mcts_trainer():
             current_mcts = next(it)
             while not b.is_terminal:
                 # Get a move from the current mcts
-                _dict = current_mcts.run_stochastically()
+                _dict = current_mcts.move_stochastically()
 
                 _move = _dict['move']
                 all_nodes = _dict['all_nodes'] # This is a list of all the nodes that were possible moves, with true probabilities attached.
@@ -367,7 +368,7 @@ class mcts_trainer():
                 current_mcts = next(it)
 
                 # Inform it of the previous move that was made
-                current_mcts.move(_move)
+                current_mcts.inform(_move)
             
             # Now the game is over, so we append the final board
             # There is not a clear policy to choose for the final board,
@@ -406,26 +407,20 @@ class mcts_trainer():
         trainee = self.model.copy()
         for _ in range(training_loops):
             # Pick our random games and set up the training data
-            x_train = {
-                'grid': np.empty((sample_size, 6, 7, 1)),
-                'bid': np.empty((sample_size, 5))
-            }
-            y_train = {
-                'value': np.empty((sample_size, 1)),
-                'policy': np.empty((sample_size, 7))
-            }
+            x_train = np.empty((sample_size, 6, 7, 2))
+            y_train = np.empty((sample_size, 8))
             training_games = np.random.choice(self.game_pool['games'], sample_size)
             for i, game in enumerate(training_games):
                 _dict = np.random.choice(game['b_and_p'])
-                x_train['grid'][i] = _dict['board'].grid.reshape((6, 7, 1))
-                x_train['bid'][i] = _dict['board'].bid.as_array
-                y_train['value'][i] = game['value']
-                y_train['policy'][i] = _dict['policy']
+                x_train[i, :, :, 0] = _dict['board'].grid
+                x_train[i, :, :, 1] = _dict['board'].bid.as_array
+                y_train[i, 0] = game['value']
+                y_train[i, 1:] = _dict['policy']
             
             # Actually train the model on this data
             trainee.fit(
-                x = [x_train['grid'], x_train['bid']],
-                y = [y_train['value'], y_train['policy']],
+                x = x_train,
+                y = y_train,
                 batch_size = batch_size,
                 epochs = epochs,
                 verbose = 0)

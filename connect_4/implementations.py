@@ -5,31 +5,31 @@ from abstract import *
 from exceptions import *
 
 class BLACK_TO_MOVE(metaclass = bid):
-    as_array = np.array((1., 0., 0., 0., 0.))
+    as_array = np.full((6, 7), 1.)
     as_string = "black to move"
     index = 0
     serialized = "BM"
 
 class RED_TO_MOVE(metaclass = bid):
-    as_array = np.array((0., 1., 0., 0., 0.))      
+    as_array = np.full((6, 7), -1.)     
     as_string = "red to move"
     index = 1     
     serialized = "RM"
 
 class BLACK_WINS(metaclass = bid):
-    as_array = np.array((0., 0., 1., 0., 0.))
+    as_array = np.full((6, 7), 0.)
     as_string = "black wins"
     index = 2
     serialized = "BW"
 
 class RED_WINS(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 1.))
+    as_array = np.full((6, 7), 0.)
     as_string = "red wins"
     index = 3
     serialized = "RW"
 
 class DRAW(metaclass = bid):
-    as_array = np.array((0., 0., 0., 0., 1.))
+    as_array = np.full((6, 7), 0.)
     as_string = "draw"
     index = 4
     serialized = "DR"
@@ -104,21 +104,23 @@ _COLOR = {
     "end": "\033[0m"
 }
 
+class _TerminalBoard(Exception):
+    pass
+
 class connect_4_board(board):
     """
     This is the class containing all relevant logic to a Connect 4 board.
     """
 
-    def __init__(self, grid: np.array = None, _id: bid = None, *args, **kwargs):
+    def __init__(self, grid: np.array = None, _bid: bid = None, _moves: 'list[bid]' = None, *args, **kwargs):
         if grid is None:
             grid = np.full((6, 7), 0.)
-        if _id is None:
-            _id = BLACK_TO_MOVE
+        if _bid is None:
+            _bid = BLACK_TO_MOVE
+        if _moves is None:
+            _moves = [PLACE_1, PLACE_2, PLACE_3, PLACE_4, PLACE_5, PLACE_6, PLACE_7]
 
-        # The draw flag stops a player from offering a draw after a decline of a draw offer.
-        self._draw_flag = False
-
-        super().__init__(*args, grid = grid, bid = _id, **kwargs)
+        super().__init__(*args, grid = grid, bid = _bid, _moves = _moves, **kwargs)
     
     def __str__(self):
         _bs = "_________________\n"
@@ -153,24 +155,15 @@ class connect_4_board(board):
     
     @property
     def moves(self) -> 'list[object]':
-        l = list()
-
-        # First check to see if the board is in a terminal state.
-        if self.is_terminal: return l
-
-        # We loop through the top of the board to see which columns have openings.
-        for i in range(len(self[0, :])):
-            if self[0, i] == 0:
-                l.append(eval(f"PLACE_{i + 1}")) # This safely allows for us to change the id encoding later
-
-        return l
+        return self._moves
 
     def copy(self) -> 'connect_4_board':
-        return type(self)(grid = np.copy(self.grid), _id = self.bid)
+        return type(self)(grid = np.copy(self.grid), _bid = self.bid, _moves = self._moves.copy())
     
     def reset(self) -> None:
         self.grid = np.full((6, 7), 0.)
         self.bid = BLACK_TO_MOVE
+        self._moves = [PLACE_1, PLACE_2, PLACE_3, PLACE_4, PLACE_5, PLACE_6, PLACE_7]
 
     def move(self, _move, inplace: bool = True) -> 'connect_4_board':
         # If the move is not one of the valid moves then throw an exception.
@@ -196,51 +189,68 @@ class connect_4_board(board):
                 break
             elif i == 5:
                 _board[i, j] = c
-
-        # Now we must figure out the id of this new board state
-        # First check for horizontal wins
-        for i in range(6):
-            for j in range(4):
-                if _board[i,j] == 0: continue # Certainly isn't a win
-                if _board[i,j] == _board[i,j+1] == _board[i,j+2] == _board[i,j+3]:
-                    if _board[i,j] == -1:
-                        _board.bid = RED_WINS
-                    else:
-                        _board.bid = BLACK_WINS
-                    return _board
         
-        # Second check for vertical wins
-        for i in range(3):
-            for j in range(7):
-                if _board[i,j] == 0: continue # Certainly isn't a win
-                if _board[i,j] == _board[i+1,j] == _board[i+2,j] == _board[i+3,j]:
-                    if _board[i,j] == -1:
-                        _board.bid = RED_WINS
-                    else:
-                        _board.bid = BLACK_WINS
-                    return _board
-        
-        # Third check for downwards diagonal wins
-        for i in range(3):
-            for j in range(4):
-                if _board[i,j] == 0: continue # Certainly isn't a win
-                if _board[i,j] == _board[i+1,j+1] == _board[i+2,j+2] == _board[i+3,j+3]:
-                    if _board[i,j] == -1:
-                        _board.bid = RED_WINS
-                    else:
-                        _board.bid = BLACK_WINS
-                    return _board
+        # Python has no goto equivalent, so a try catch with a custom exception is the best we can do
+        try:
+            # Now we must figure out the bid of this new board state
+            # First check for horizontal wins
+            for i in range(6):
+                for j in range(4):
+                    if _board[i,j] == 0: continue # Certainly isn't a win
+                    if _board[i,j] == _board[i,j+1] == _board[i,j+2] == _board[i,j+3]:
+                        if _board[i,j] == -1:
+                            _board.bid = RED_WINS
+                            raise _TerminalBoard()
+                        else:
+                            _board.bid = BLACK_WINS
+                            raise _TerminalBoard()
+            
+            # Second check for vertical wins
+            for i in range(3):
+                for j in range(7):
+                    if _board[i,j] == 0: continue # Certainly isn't a win
+                    if _board[i,j] == _board[i+1,j] == _board[i+2,j] == _board[i+3,j]:
+                        if _board[i,j] == -1:
+                            _board.bid = RED_WINS
+                            raise _TerminalBoard()
+                        else:
+                            _board.bid = BLACK_WINS
+                            raise _TerminalBoard()
+            
+            # Third check for downwards diagonal wins
+            for i in range(3):
+                for j in range(4):
+                    if _board[i,j] == 0: continue # Certainly isn't a win
+                    if _board[i,j] == _board[i+1,j+1] == _board[i+2,j+2] == _board[i+3,j+3]:
+                        if _board[i,j] == -1:
+                            _board.bid = RED_WINS
+                            raise _TerminalBoard()
+                        else:
+                            _board.bid = BLACK_WINS
+                            raise _TerminalBoard()
 
-        # Fourth check for upwards diagonal wins
-        for i in range(3,6):
-            for j in range(4):
-                if _board[i,j] == 0: continue # Certainly isn't a win
-                if _board[i,j] == _board[i-1,j+1] == _board[i-2,j+2] == _board[i-3,j+3]:
-                    if _board[i,j] == -1:
-                        _board.bid = RED_WINS
-                    else:
-                        _board.bid = BLACK_WINS
-                    return _board
+            # Fourth check for upwards diagonal wins
+            for i in range(3,6):
+                for j in range(4):
+                    if _board[i,j] == 0: continue # Certainly isn't a win
+                    if _board[i,j] == _board[i-1,j+1] == _board[i-2,j+2] == _board[i-3,j+3]:
+                        if _board[i,j] == -1:
+                            _board.bid = RED_WINS
+                            raise _TerminalBoard()
+                        else:
+                            _board.bid = BLACK_WINS
+                            raise _TerminalBoard()
+        except _TerminalBoard:
+            _board._moves = list()
+            return _board
+        
+        # Alright, we might have a draw here, but the easiest way to check is by computing the available moves
+        _board._moves = list()
+
+        # We loop through the top of the board to see which columns have openings.
+        for i in range(len(self[0, :])):
+            if self[0, i] == 0:
+                _board._moves.append(eval(f"PLACE_{i + 1}")) # This safely allows for us to change the id encoding later
 
         # We have no connect 4's. Now check for a DRAW (no valid moves).
         if _board.moves == []:
@@ -264,16 +274,33 @@ class connect_4_board(board):
     def dejsonify(cls, d: dict) -> 'connect_4_board':
         _grid = np.array(d['grid'])
         _bid = deserialize(d['bid'])
-        return connect_4_board(grid = _grid, _id = _bid)
+        return connect_4_board(grid = _grid, _bid = _bid)
+
+def naive_decision_func(root_board: connect_4_board, _board: connect_4_board) -> float:
+    if _board.bid == BLACK_WINS:
+        if root_board.bid == BLACK_TO_MOVE:
+            return 1
+        else:
+            return -1
+    elif _board.bid == RED_WINS:
+        if root_board.bid == RED_TO_MOVE:
+            return 1
+        else:
+            return -1
+    else:
+        return 0
 
 class random_player(player):
     """
-    This player makes random moves that are not draw offers or resignations
+    This player makes random moves
     """
     def move(self):
         return np.random.choice(self.board.moves)
     
     def inform(self, _move: bid):
+        ...
+    
+    def reset(self):
         ...
 
 class cli_player(player):
@@ -293,6 +320,9 @@ class cli_player(player):
 
     def inform(self, _move: bid):
         print(str(_move) + " was played.")
+    
+    def reset(self):
+        print("Board reseting...")
 
 class connect_4_game(two_player_game):
     def __init__(self, _board: connect_4_board, player_1: player, player_2: player) -> None:
@@ -305,7 +335,6 @@ class connect_4_game(two_player_game):
         for n in range(rounds):
             # Start by initializing the game
             self.board.reset()
-            board_list = [self.board.copy()]
             if n % 2 == 0:
                 it = iter(cycle([self.player_1, self.player_2]))
             else:
@@ -316,23 +345,29 @@ class connect_4_game(two_player_game):
                 # Have the player choose a move and make the move
                 _move = current_player.move()
                 self.board.move(_move)
-
-                # If the move was successful then add the new board state to the list
-                board_list.append(self.board)
                 
                 # Move to the next player
                 current_player = next(it)
 
                 # Inform them of the move made by the other player
                 current_player.inform(_move)
+            # Since we move to the next player inside the loop, the other player is actually the winner.
+            current_player = next(it)
             if self.board.bid == DRAW:
-                draws += 1  
+                draws += 1
+                elo.update(self.player_1.elo, self.player_2.elo, 1/2, 1/2)
             else:
                 current_player.wins += 1
-        
-        _ = self.player_1.wins - self.player_2.wins
-        # Update the elos of the players
-        elo.update(self.player_1.elo, self.player_2.elo, _, -_)
+                if current_player == self.player_1:
+                    elo.update(self.player_1.elo, self.player_2.elo, 1, 0)
+                else:
+                    elo.update(self.player_1.elo, self.player_2.elo, 0, 1)
+            
+            # Let the players know to reset
+            self.player_1.reset()
+            self.player_2.reset()
+
+            print('game {0}/{1} has finished.'.format(n, rounds))
 
         return {
             'player_1': self.player_1.wins,

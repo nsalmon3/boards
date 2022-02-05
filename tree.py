@@ -2,6 +2,7 @@ from typing import Callable
 import numpy as np
 
 from abstract import *
+from connect_4.implementations import BLACK_TO_MOVE, RED_TO_MOVE
 
 class node():
     def __init__(self, parent = None, children = None, **kwargs):
@@ -119,7 +120,7 @@ class mcts():
                 _node.Q = _node.W / _node.N
                 _node = _node.parent
     
-    def move(self, _move):
+    def inform(self, _move):
         # If the root node is a leaf, then it has never been visited and we essentially start a new tree under it.
         if self.root_node.children is None or len(self.root_node.children) == 0:
             self.root_node = mcts_node()
@@ -132,7 +133,7 @@ class mcts():
                 return
         raise ValueError("mcts tried to make move " + _move.as_string + " on board:\n" + str(self.board))
     
-    def run_deterministically(self, n: int = _DEFAULT_PROPS):
+    def move_deterministically(self, n: int = _DEFAULT_PROPS):
         """
         Runs looking to make the best move it can. Returns the move.
         """
@@ -157,7 +158,7 @@ class mcts():
 
         return self.root_node.move
 
-    def run_stochastically(self, n: int = _DEFAULT_PROPS) -> dict:
+    def move_stochastically(self, n: int = _DEFAULT_PROPS) -> dict:
         """
         Runs looking to explore and practice the game. Returns a dictionary of relevant training data for trainer.
         """
@@ -187,15 +188,60 @@ class mcts():
         self.root_node = mcts_node()
 
 class mcts_player(player):
-    def __init__(self, _board: board, decision_func: Callable[[board, board], dict]):
-        super().__init__(_board)
+    def __init__(self, _board: board, decision_func: Callable[[board, board], dict], _elo: elo = None):
+        super().__init__(_board, _elo = _elo)
         self.mcts = mcts(_board, decision_func)
 
     def move(self) -> bid:
-        return self.mcts.run_deterministically()
+        return self.mcts.move_deterministically()
     
     def inform(self, _move: bid):
-        self.mcts.move(_move)
+        self.mcts.inform(_move)
 
     def reset(self):
         self.mcts.reset()
+
+def minimax(root_board: board, _board: board, depth, maximizing_player: bool, decision_func: Callable[[board, board], float]):
+    """
+    The abstract minimax function. It wants to know who is asking and what board they are asking about.
+    """
+
+    # First check if we have reached our desired minimax depth or if the boardstate is a final state.
+    if depth == 0 or _board.is_terminal:
+        return decision_func(root_board, _board)
+
+    # Now is the logic for the minimax algorithm
+    if maximizing_player:
+        value = -np.Inf
+        for move in _board.moves:
+            value = max(value, minimax(root_board, _board.move(move, inplace = False), depth - 1, False, decision_func))
+        return value
+    else:
+        value = np.Inf
+        for move in _board.moves:
+            value = min(value, minimax(root_board, _board.move(move, inplace = False), depth - 1, True, decision_func))
+        return value
+ 
+class minimax_player(player):
+    def __init__(self, _board: board, decision_func: Callable[[board, board], float], depth: int, _elo: elo = None) -> None:
+        super().__init__(_board, _elo)
+        self.decision_func = decision_func
+        self.depth = depth
+    
+    def move(self) -> bid:
+        best_moves = list()
+        _min = -np.Inf
+        for move in self.board.moves:
+            val = minimax(self.board, self.board.move(move, inplace = False), self.depth - 1, False, self.decision_func)
+            if val > _min:
+                _min = val
+                best_moves = [move]
+            elif val == _min:
+                best_moves.append(move)
+        return np.random.choice(best_moves)
+    
+    def inform(self, _move: bid):
+        ...
+    
+    def reset(self):
+        ...

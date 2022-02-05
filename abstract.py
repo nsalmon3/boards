@@ -35,12 +35,14 @@ class board(ABC):
     """
     This is the abstract board class defining how boards must be defined.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, _moves: 'list[bid]', *args, **kwargs):
         """
         The only logic in here is to allow derived classes to easily define properties upon initialization.
         """
+        super().__init__()
         for arg in kwargs:
             self.__dict__[arg] = kwargs[arg]
+        self._moves = _moves
 
     @property
     @abstractmethod
@@ -51,12 +53,11 @@ class board(ABC):
         ...
 
     @property
-    @abstractmethod
     def moves(self) -> 'list[bid]':
         """
         Returns the list of valid moves in the current board state.
         """
-        ...
+        return self._moves
 
     @abstractmethod
     def move(self, move: bid, inplace: bool = True) -> 'board':
@@ -105,10 +106,10 @@ class player(ABC):
     def __init__(self, _board: board, _elo: elo = None) -> None:
         super().__init__()
         self.board = _board
-        if _elo is not None:
-            self.elo = _elo
-        else:
+        if _elo is None:
             self.elo = elo()
+        else:
+            self.elo = _elo
 
     @abstractmethod
     def move(self) -> bid:
@@ -124,6 +125,12 @@ class player(ABC):
         A game can call this on each player every time a move is made, so that players get updates on other players moves.
         """
         ...
+    
+    @abstractmethod
+    def reset(self):
+        """
+        Like inform, some players need to do some things in between tournament games. We let them know to reset with this.
+        """
 
 class two_player_game():
     """
