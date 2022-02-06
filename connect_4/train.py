@@ -4,6 +4,7 @@ from tensorflow.keras.layers import (Input, Dense, Conv2D, Flatten, Concatenate,
 from tensorflow.keras.losses import (CategoricalCrossentropy, MeanSquaredError)
 from tensorflow.keras.models import (load_model, clone_model)
 from tensorflow.keras.regularizers import (L2)
+from abc import *
 import json
 
 from connect_4.implementations import *
@@ -19,7 +20,7 @@ logging.basicConfig(
     ]
 )
 
-def naive_decision_function(root_board: connect_4_board, _board: connect_4_board):
+def naive_mcts_function(root_board: connect_4_board, _board: connect_4_board):
     if _board.bid == BLACK_WINS:
         if root_board.bid == BLACK_TO_MOVE or root_board.bid == BLACK_WINS:
             v = 1
@@ -48,28 +49,25 @@ def naive_decision_function(root_board: connect_4_board, _board: connect_4_board
     }
 
 # The number of games for a training network to play against itself before retraining and evaluation
-_SELF_PLAY_GAMES = 2500
+_SELF_PLAY_GAMES = 256
 
 # The number of games that will be written to disk for future training sessions
-_GAMES_STORED = 50000
+_GAMES_STORED = 1024
 
 # The number of boards to be sampled from the _GAMES_STORED games for weight training
 _SAMPLE_SIZE = 256
 
 # The number of times to randomly sample games and train before evaluation
-_TRAINING_LOOPS = 100
+_TRAINING_LOOPS = 64
 
 # The number of games to play against the best network to evaluate a newly trained network
-_EVALUTATION_GAMES = 40
+_EVALUTATION_GAMES = 64
 
 # The percentage of games that must be won by a new network to be declared the new best network
 _WIN_THRESHOLD = 0.55
 
 # The relative directory to store games
 _GAMES_DIR = "connect_4\\games\\"
-
-# The relative directory to store models
-_MODEL_DIR = "connect_4\\models\\"
 
 # This is the policy used for terminal boards. There isn't a clear choice here, so we make a global for ease of edit.
 class _NULL_POLICY:
@@ -105,31 +103,34 @@ def _residual_layer(inputs):
     outputs = Add()([inputs,outputs])
     return relu(outputs)
 
-class connect_4_model():
-    def __init__(self, name: str, model: Model = None):
+class connect_4_model(ABC):
+    @classmethod
+    @abstractmethod
+    def _get_model(cls):
+        """
+        This is the method that connect_4_model classes must override to define their model structure.
+        The base class takes care of essentially all other logic.
+        """
+        ...
+    
+    @classmethod
+    @property
+    @abstractmethod
+    def _model_dir(self):
+        """
+        This returns the directory to save the model in.
+        Must override in base class.
+        """
+        ...
+
+    def __init__(self, model: Model = None):
         if model is not None:
             self._model = model
         else:
-            # Inputs
-            _input = Input(shape = (6, 7, 2))
-
-            # Layers for board convolution embedding
-            _internal = _convolutional_layer(_input)
-            _internal = _residual_layer(_internal)
-            _internal = Flatten()(_internal)
-
-            # Layers after concatenation
-            _internal = Dense(32, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
-            _internal = Dense(16, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
-            _internal = Dense(8, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
-            _policy_head = Dense(7, kernel_regularizer = L2(), bias_regularizer = L2(), activation = 'softmax')(_internal)
-            _value_head = Dense(1, kernel_regularizer = L2(), bias_regularizer = L2(), activation='tanh')(_internal)
-            _output = Concatenate()([_value_head, _policy_head])
-
-            self._model = Model(inputs = _input, outputs = _output)
-        
-        self.name = name
-        self._model.compile(loss=_default_loss, optimizer = 'adam')
+            try:
+                self.load()
+            except IOError:
+                self._model = self._get_model()
     
     def __call__(self, _board: connect_4_board):
         _input = np.empty((1, 6, 7, 2))
@@ -155,32 +156,112 @@ class connect_4_model():
         return self._model.fit(**kwargs)
     
     def copy(self) -> 'connect_4_model':
-        return type(self)(name = self.name, model = clone_model(self._model))
+        model_copy= clone_model(self._model)
+        model_copy.build((None, 6, 7, 2))
+        model_copy.compile(optimizer='rmsprop', loss=_default_loss)
+        model_copy.set_weights(self._model.get_weights())
+        return type(self)(model = model_copy)
     
     def save(self):
-        self._model.save(_MODEL_DIR + self.name)
+        self._model.save(self._model_dir)
+    
+    def decision_func(self, root_board: connect_4_board, _board: connect_4_board):
+        # We help the neural net learn by allowing the mcts to know about terminal boards
+        # By having this first check for terminal boards, the network will learn it's policy faster... at least in theory
+        if _board.bid == BLACK_WINS:
+            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                v = 1
+            else:
+                v = -1
+            return {
+                "value": v,
+                "policy": []
+            }
+        elif _board.bid == RED_WINS:
+            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+                v = -1
+            else:
+                v = 1
+            return {
+                "value": v,
+                "policy": []
+            }
+        elif _board.bid == DRAW:
+            v = 0
+            return {
+                "value": v,
+                "policy": []
+            }
+        
+        # Call the model on the virtual board
+        r = self(_board)
+        value_head = r["value"]
+        policy_head = r["policy"]
+
+        # Process the value for the current board state
+        # The first if means it is black's turn, so the network outputs their true value
+        # If it's not black's turn, then negate the value so it's from the persepctive of red
+        # Technically the draw one is ambiguous...
+        if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
+            v = value_head
+        else:
+            v = -value_head
+        
+        # Process the policy
+        p = list()
+        for _move in _board.moves:
+            p.append(mcts_node(
+                _move = _move,
+                P = policy_head[_move]
+            ))
+        
+        return {
+            "value": v,
+            "policy": p
+        }
 
     @classmethod
-    def load(cls, name: str) -> 'connect_4_model':
-        return cls(name = name, model = load_model(_MODEL_DIR + name, custom_objects={'_default_loss': _default_loss}))
+    def load(cls) -> 'connect_4_model':
+        return cls(model = load_model(cls._model_dir, custom_objects={'_default_loss': _default_loss}))
     
+class connect_4_model_00(connect_4_model):
+    @classmethod
+    def _get_model(cls):
+        # Inputs
+        _input = Input(shape = (6, 7, 2))
+
+        # Layers for board convolution embedding
+        _internal = _convolutional_layer(_input)
+        _internal = _residual_layer(_internal)
+        _internal = Flatten()(_internal)
+
+        # Layers after concatenation
+        _internal = Dense(32, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
+        _internal = Dense(16, kernel_regularizer = L2(), bias_regularizer = L2())(_internal)
+        _policy_head = Dense(7, kernel_regularizer = L2(), bias_regularizer = L2(), activation = 'softmax')(_internal)
+        _value_head = Dense(1, kernel_regularizer = L2(), bias_regularizer = L2(), activation='tanh')(_internal)
+        _output = Concatenate()([_value_head, _policy_head])
+
+        _model = Model(inputs = _input, outputs = _output)
+        _model.build((None, 6, 7, 2))
+        _model.compile(loss=_default_loss, optimizer = 'adam')
+
+        return _model
+    
+    @classmethod
+    @property
+    def _model_dir(cls):
+        return "connect_4\\models\\connect_4_model_00"
+
 class mcts_trainer():
-    def __init__(self, model_name: str = "best", game_pool_name: str = "best") -> None:
+    def __init__(self, model: connect_4_model, game_pool_name: str = "best") -> None:
         """
         game_pool: This is a name for the pool of games the trainer will use for training.
             If no game_pool.json file exists in _GAMES_DIR, then a new one will be made.
         """
-        # Start by initializing the model
-        try:
-            self.model = connect_4_model.load(model_name)
-        except Exception as e:
-            logging.error(e)
-            logging.info("Creating blank model '" + model_name + "' and starting train loop.")
-            self.model = connect_4_model(model_name)
-
-        # Now try to load in games in the given game_pool, defaulting to a fresh pool if the file doesn't exist.
+        # Start by saving the model and games
+        self.model = model
         self.game_pool_name = game_pool_name
-        self.model_name = model_name
         try:
             with open(_GAMES_DIR + game_pool_name + '.json', "r") as f:
                 self.game_pool = json.load(f)
@@ -195,126 +276,11 @@ class mcts_trainer():
                 b_and_p["board"] = connect_4_board.dejsonify(b_and_p["board"])
                 b_and_p['policy'] = np.array(b_and_p['policy'])
             _game['value'] = np.array(_game['value'])
-
-    @property
-    def decision_func(self):
-        def f(root_board: connect_4_board, _board: connect_4_board):
-            # We help the neural net learn by allowing the mcts to know about terminal boards
-            # By having this first check for terminal boards, the network will learn it's policy faster... at least in theory
-            if _board.bid == BLACK_WINS:
-                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                    v = 1
-                else:
-                    v = -1
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            elif _board.bid == RED_WINS:
-                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                    v = -1
-                else:
-                    v = 1
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            elif _board.bid == DRAW:
-                v = 0
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            
-            # Call the model on the virtual board
-            r = self.model(_board)
-            value_head = r["value"]
-            policy_head = r["policy"]
-
-            # Process the value for the current board state
-            # The first if means it is black's turn, so the network outputs their true value
-            # If it's not black's turn, then negate the value so it's from the persepctive of red
-            # Technically the draw one is ambiguous...
-            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                v = value_head
-            else:
-                v = -value_head
-            
-            # Process the policy
-            p = list()
-            for _move in _board.moves:
-                p.append(mcts_node(
-                    _move = _move,
-                    P = policy_head[_move]
-                ))
-            
-            return {
-                "value": v,
-                "policy": p
-            }
-        return f
-
-    @staticmethod
-    def gen_decision_func(model: connect_4_model):
-        def f(root_board: connect_4_board, _board: connect_4_board):
-            # We help the neural net learn by allowing the mcts to know about terminal boards
-            # By having this first check for terminal boards, the network will learn it's policy faster... at least in theory
-            if _board.bid == BLACK_WINS:
-                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                    v = 1
-                else:
-                    v = -1
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            elif _board.bid == RED_WINS:
-                if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                    v = -1
-                else:
-                    v = 1
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            elif _board.bid == DRAW:
-                v = 0
-                return {
-                    "value": v,
-                    "policy": []
-                }
-            # Call the model on the virtual board
-            r = model(_board)
-            value_head = r["value"]
-            policy_head = r["policy"]
-
-            # Process the value for the current board state
-            # The first if means it is black's turn, so the network outputs their true value
-            # If it's not black's turn, then negate the value so it's from the persepctive of red
-            # Technically the draw one is ambiguous...
-            if root_board.bid == BLACK_TO_MOVE or root_board.bid == RED_WINS or root_board.bid == DRAW:
-                v = value_head
-            else:
-                v = -value_head
-            
-            # Process the policy
-            p = list()
-            for _move in _board.moves:
-                p.append(mcts_node(
-                    _move = _move,
-                    P = policy_head[_move]
-                ))
-            
-            return {
-                "value": v,
-                "policy": p
-            }
-        return f
     
     def save_games(self):
-        serialized = list()
+        jsonified = list()
         for game in self.game_pool['games']:
-            serialized.append({
+            jsonified.append({
                 'b_and_p': [{
                     'board': b_and_p['board'].jsonify(),
                     'policy': b_and_p['policy'].tolist()
@@ -324,15 +290,15 @@ class mcts_trainer():
         with open(_GAMES_DIR + self.game_pool_name + '.json', 'w') as f:
             f.truncate(0)
             json.dump({
-                'games': serialized
+                'games': jsonified
             }, f)
     
     def self_play(self, rounds: int = _SELF_PLAY_GAMES):
         for _ in range(rounds):
             # We being by initializing two instances of mcts on a shared board
             b = connect_4_board()
-            m1 = mcts(b, self.decision_func)
-            m2 = mcts(b, self.decision_func)
+            m1 = mcts(b, self.model.decision_func)
+            m2 = mcts(b, self.model.decision_func)
 
             # We keep track of the boards in this game here.
             game = {
@@ -405,6 +371,7 @@ class mcts_trainer():
 
         # In the train and eval step, we copy the best model, train it, and play the copy against the best
         trainee = self.model.copy()
+
         for _ in range(training_loops):
             # Pick our random games and set up the training data
             x_train = np.empty((sample_size, 6, 7, 2))
@@ -428,8 +395,8 @@ class mcts_trainer():
         
         # Now play the trainee against the best model
         b = connect_4_board()
-        trainee_player = mcts_player(b, self.gen_decision_func(trainee))
-        best_player = mcts_player(b, self.decision_func)
+        trainee_player = mcts_player(b, trainee.decision_func)
+        best_player = mcts_player(b, self.model.decision_func)
 
         trainee_player.wins = 0
         best_player.wins = 0
@@ -463,7 +430,6 @@ class mcts_trainer():
                 # Inform it of the previous move that was made
                 current_player.inform(_move)
             # Once the game is over, we want to record the result
-            # We store it in a numpy array because the neural network prefers this
             # When we serialize things will be stored differently
             if b.bid == BLACK_WINS:
                 black_player.wins += 1

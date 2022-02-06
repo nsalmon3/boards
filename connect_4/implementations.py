@@ -276,7 +276,7 @@ class connect_4_board(board):
         _bid = deserialize(d['bid'])
         return connect_4_board(grid = _grid, _bid = _bid)
 
-def naive_decision_func(root_board: connect_4_board, _board: connect_4_board) -> float:
+def naive_value_func(root_board: connect_4_board, _board: connect_4_board) -> float:
     if _board.bid == BLACK_WINS:
         if root_board.bid == BLACK_TO_MOVE:
             return 1
