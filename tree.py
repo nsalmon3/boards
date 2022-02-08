@@ -52,13 +52,14 @@ class mcts_node(node):
         W: float = 0,
         Q: float = 0, 
         P: float = 0,
+        v: float = 0,
         **kwargs):
 
-        super().__init__(parent, children, move = _move, N = N, W = W, Q = Q, P = P, **kwargs)
+        super().__init__(parent, children, move = _move, N = N, W = W, Q = Q, P = P, v = v, **kwargs)
 
-_DEFAULT_PROPS = 100
+_DEFAULT_PROPS = 7 ** 3
 _TEMPERATURE = 1
-_EXPLORATION_CONSTANT = 1 / 100
+_EXPLORATION_CONSTANT = 1
 
 class mcts():
     def __init__(self,
@@ -97,7 +98,7 @@ class mcts():
                 _max_nodes = list()
                 _sqrt = np.sqrt(sum(_n.N for _n in _node.children))
                 for child in _node.children:
-                    _U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
+                    _U = _EXPLORATION_CONSTANT * child.P * (1 + _sqrt) / (1 + child.N)
                     if child.Q + _U > _max:
                         _max = child.Q + _U
                         _max_nodes = [child]
@@ -114,11 +115,16 @@ class mcts():
 
             # Now we must propogate the value back through the tree
             v = _dict["value"]
+            _node.v = v
             while not _node.is_root():
                 _node.N += 1
                 _node.W += v
                 _node.Q = _node.W / _node.N
                 _node = _node.parent
+            # Now update the root
+            _node.N += 1
+            _node.W += v
+            _node.Q = _node.W / _node.N
     
     def inform(self, _move):
         # If the root node is a leaf, then it has never been visited and we essentially start a new tree under it.
@@ -145,13 +151,36 @@ class mcts():
 
         _max = -np.Inf
         _max_nodes = list()
-        _sqrt = np.sqrt(sum(n.N for n in self.root_node.children))
         for child in self.root_node.children:
-            U = _EXPLORATION_CONSTANT * child.P * _sqrt / (1 + child.N)
-            if child.Q + U > _max:
-                _max = child.Q + U
+            if child.N > _max:
+                _max = child.N
                 _max_nodes = [child]
-            elif child.Q + U == _max:
+            elif child.N == _max:
+                _max_nodes.append(child)
+
+        self.root_node = np.random.choice(_max_nodes).prune()
+
+        return self.root_node.move
+    
+    def move_minimax_deterministically(self, n: int = _DEFAULT_PROPS):
+        """
+        Runs a mcts as normal. However, rather than pick the move with most visits,
+        it does a minimax on Q to pick it's move.
+        """
+        self._propogate(n)
+
+        # If the root node has no children after propogation
+        if self.root_node.children is None:
+            return None
+
+        _max = -np.Inf
+        _max_nodes = list()
+        for child in self.root_node.children:
+            val = mcts_minimax(child, False)
+            if val > _max:
+                _max = val
+                _max_nodes = [child]
+            elif val == _max:
                 _max_nodes.append(child)
 
         self.root_node = np.random.choice(_max_nodes).prune()
@@ -194,6 +223,40 @@ class mcts_player(player):
 
     def move(self) -> bid:
         return self.mcts.move_deterministically()
+    
+    def inform(self, _move: bid):
+        self.mcts.inform(_move)
+
+    def reset(self):
+        self.mcts.reset()
+
+def mcts_minimax(current_node: mcts_node, maximizing_player: bool):
+    """
+    The abstract minimax function. It wants to know who is asking and what board they are asking about.
+    """
+
+    # First check if we have reached our desired minimax depth or if the boardstate is a final state.
+    if current_node.is_leaf():
+        return current_node.v
+    # Now is the logic for the minimax algorithm
+    if maximizing_player:
+        value = -np.Inf
+        for child in current_node.children:
+            value = max(value, mcts_minimax(child, False))
+        return value
+    else:
+        value = np.Inf
+        for child in current_node.children:
+            value = min(value, mcts_minimax(child, True))
+        return value
+
+class minimax_mcts_player(player):
+    def __init__(self, _board: board, decision_func: Callable[[board, board], dict], _elo: elo = None):
+        super().__init__(_board, _elo = _elo)
+        self.mcts = mcts(_board, decision_func)
+
+    def move(self) -> bid:
+        return self.mcts.move_minimax_deterministically()
     
     def inform(self, _move: bid):
         self.mcts.inform(_move)

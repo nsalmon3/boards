@@ -4,6 +4,7 @@ from tensorflow.keras.layers import (Input, Dense, Conv2D, Flatten, Concatenate,
 from tensorflow.keras.losses import (CategoricalCrossentropy, MeanSquaredError)
 from tensorflow.keras.models import (load_model, clone_model)
 from tensorflow.keras.regularizers import (L2)
+from tensorflow import function as tffunc
 from abc import *
 import json
 
@@ -104,6 +105,11 @@ def _residual_layer(inputs):
     return relu(outputs)
 
 class connect_4_model(ABC):
+    """
+    Wraps a keras model for mcts with connect 4.
+    Has abstract methods than must be overidden in child classes.
+    The child classes are viewed as the different models for connect 4.
+    """
     @classmethod
     @abstractmethod
     def _get_model(cls):
@@ -128,7 +134,7 @@ class connect_4_model(ABC):
             self._model = model
         else:
             try:
-                self.load()
+                self._model = load_model(self._model_dir, custom_objects={'_default_loss': _default_loss})
             except IOError:
                 self._model = self._get_model()
     
@@ -156,7 +162,7 @@ class connect_4_model(ABC):
         return self._model.fit(**kwargs)
     
     def copy(self) -> 'connect_4_model':
-        model_copy= clone_model(self._model)
+        model_copy = clone_model(self._model)
         model_copy.build((None, 6, 7, 2))
         model_copy.compile(optimizer='rmsprop', loss=_default_loss)
         model_copy.set_weights(self._model.get_weights())

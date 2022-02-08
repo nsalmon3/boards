@@ -3,73 +3,63 @@ import numpy as np
 
 from abstract import *
 from exceptions import *
+from itertools import combinations
 
 class BLACK_TO_MOVE(metaclass = bid):
     as_array = np.full((6, 7), 1.)
     as_string = "black to move"
     index = 0
     serialized = "BM"
-
 class RED_TO_MOVE(metaclass = bid):
     as_array = np.full((6, 7), -1.)     
     as_string = "red to move"
     index = 1     
     serialized = "RM"
-
 class BLACK_WINS(metaclass = bid):
     as_array = np.full((6, 7), 0.)
     as_string = "black wins"
     index = 2
     serialized = "BW"
-
 class RED_WINS(metaclass = bid):
     as_array = np.full((6, 7), 0.)
     as_string = "red wins"
     index = 3
     serialized = "RW"
-
 class DRAW(metaclass = bid):
     as_array = np.full((6, 7), 0.)
     as_string = "draw"
     index = 4
     serialized = "DR"
-
 class PLACE_1(metaclass = bid): 
     as_array = np.array((1., 0., 0., 0., 0., 0., 0.))
     as_string = "place 1"
     index = 0
     serialized = "P1"
-
 class PLACE_2(metaclass = bid): 
     as_array = np.array((0., 1., 0., 0., 0., 0., 0.))
     as_string = "place 2"
     index = 1
     serialized = "P2"
-
 class PLACE_3(metaclass = bid):
     as_array = np.array((0., 0., 1., 0., 0., 0., 0.))
     as_string = "place 3"
     index = 2
     serialized = "P3"
-
 class PLACE_4(metaclass = bid):
     as_array = np.array((0., 0., 0., 1., 0., 0., 0.))
     as_string = "place 4"
     index = 3
     serialized = "P4"
-
 class PLACE_5(metaclass = bid):
     as_array = np.array((0., 0., 0., 0., 1., 0., 0.))
     as_string = "place 5"
     index = 4
     serialized = "P5"
-
 class PLACE_6(metaclass = bid):
     as_array = np.array((0., 0., 0., 0., 0., 1., 0.))
     as_string = "place 6"
     index = 5
     serialized = "P6"
-
 class PLACE_7(metaclass = bid):
     as_array = np.array((0., 0., 0., 0., 0., 0., 1.))
     as_string = "place 7"
@@ -95,7 +85,6 @@ def deserialize(_id: str):
     elif _id == PLACE_7.serialized: return PLACE_7
 
     else: raise ValueError(str(_id) + " could not be deserialized for connect_4.")
-
 
 # Fun display colors for command line
 _COLOR = {
@@ -324,11 +313,13 @@ class cli_player(player):
     def reset(self):
         print("Board reseting...")
 
-class connect_4_game(two_player_game):
+class connect_4_game():
     def __init__(self, _board: connect_4_board, player_1: player, player_2: player) -> None:
-        super().__init__(_board, player_1, player_2)
+        self.board = _board
+        self.player_1 = player_1
+        self.player_2 = player_2
     
-    def play_tourney(self, rounds: int = 1) -> dict:
+    def play(self, rounds: int = 1) -> dict:
         draws = 0
         self.player_1.wins = 0
         self.player_2.wins = 0
@@ -336,9 +327,13 @@ class connect_4_game(two_player_game):
             # Start by initializing the game
             self.board.reset()
             if n % 2 == 0:
-                it = iter(cycle([self.player_1, self.player_2]))
+                black_player = self.player_1
+                red_player = self.player_2
             else:
-                it = iter(cycle([self.player_2, self.player_1]))
+                black_player = self.player_2
+                red_player = self.player_1
+            
+            it = iter(cycle([black_player, red_player]))
             current_player = next(it)
 
             while not self.board.is_terminal:
@@ -351,21 +346,20 @@ class connect_4_game(two_player_game):
 
                 # Inform them of the move made by the other player
                 current_player.inform(_move)
-            # Since we move to the next player inside the loop, the other player is actually the winner.
-            current_player = next(it)
+
             if self.board.bid == DRAW:
                 draws += 1
-                elo.update(self.player_1.elo, self.player_2.elo, 1/2, 1/2)
-            else:
-                current_player.wins += 1
-                if current_player == self.player_1:
-                    elo.update(self.player_1.elo, self.player_2.elo, 1, 0)
-                else:
-                    elo.update(self.player_1.elo, self.player_2.elo, 0, 1)
+                elo.update(black_player.elo, red_player.elo, 1/2, 1/2)
+            elif self.board.bid == BLACK_WINS:
+                black_player.wins += 1
+                elo.update(black_player.elo, red_player.elo, 1, 0)
+            elif self.board.bid == RED_WINS:
+                red_player.wins += 1
+                elo.update(black_player.elo, red_player.elo, 0, 1)
             
             # Let the players know to reset
-            self.player_1.reset()
-            self.player_2.reset()
+            black_player.reset()
+            red_player.reset()
 
             print('game {0}/{1} has finished.'.format(n, rounds))
 
@@ -374,3 +368,11 @@ class connect_4_game(two_player_game):
             'player_2': self.player_2.wins,
             'draws': draws
         }
+
+def connect_4_round_robin(_board: connect_4_board, games_per_round: int = 1, *players):
+    for pair in combinations(players, 2):
+        connect_4_game(_board, pair[0], pair[1]).play(games_per_round)
+    return {
+        player: str(player.elo)
+        for player in players
+    }
